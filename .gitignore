@@ -1,0 +1,15 @@
+# Virtual environments
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Scoring inputs/outputs (records.json, scores.json, ...)
+**/scripts/*.json
+
+# Merged model outputs (should live outside the repo, but just in case)
+*.safetensors
+*.pth
+MERGE_COMPLETE
