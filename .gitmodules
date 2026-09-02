@@ -1,0 +1,3 @@
+[submodule "hpsv3pp/third_party/HPSv3-PlusPlus"]
+	path = hpsv3pp/third_party/HPSv3-PlusPlus
+	url = https://github.com/PlantPotatoOnMoon/HPSv3-PlusPlus.git
