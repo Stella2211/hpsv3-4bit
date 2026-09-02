@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence
@@ -191,6 +192,56 @@ def default_bnb_config(compute_dtype=torch.bfloat16) -> BitsAndBytesConfig:
     )
 
 
+def _load_processor(merged_dir: str, processor_dir: str | None, base_model_name: str):
+    """Load the AutoProcessor, preferring: explicit `processor_dir` >
+    `merged_dir` (if it actually contains processor files) > the base model
+    id. Merged dirs produced by `merge_and_save_bf16()` include the
+    processor; the community pre-merged bdsqlsz/HPSV3-PlusPLus-BF16 export
+    ships only config.json + weight safetensors, in which case we fall back
+    to the base model's processor and re-add the reward token exactly like
+    the merge step does (appended at the end of the vocab, matching the
+    merged model's resized embeddings)."""
+    if processor_dir is not None:
+        source = processor_dir
+    elif (Path(merged_dir) / "preprocessor_config.json").exists():
+        source = merged_dir
+    else:
+        source = base_model_name
+    processor = AutoProcessor.from_pretrained(source, padding_side="right")
+    if SPECIAL_REWARD_TOKEN not in processor.tokenizer.get_vocab():
+        processor.tokenizer.add_special_tokens(
+            {"additional_special_tokens": [SPECIAL_REWARD_TOKEN]}
+        )
+    return processor
+
+
+def _device_map_from_device(device: str):
+    """Derive a transformers `device_map` from a torch-style device string.
+    "cuda" (no index) keeps the historical default {"": 0}; "cuda:N" pins
+    all modules to GPU N."""
+    if device.startswith("cuda"):
+        index = int(device.split(":", 1)[1]) if ":" in device else 0
+        return {"": index}
+    return {"": device}
+
+
+def _warn_if_not_fp32(model, module_names: Sequence[str]) -> None:
+    """Lightweight post-load sanity check: these modules are in
+    `llm_int8_skip_modules` and were saved in fp32, so they should still be
+    fp32 after the quantized reload. Warn (not assert) so that custom
+    quantization configs remain usable."""
+    for name in module_names:
+        module = getattr(model, name, None)
+        if module is None:
+            continue
+        bad = {str(p.dtype) for p in module.parameters() if p.dtype != torch.float32}
+        if bad:
+            warnings.warn(
+                f"expected model.{name} to be fp32 after load, found {sorted(bad)}; "
+                "scores may not match the reference setup"
+            )
+
+
 @dataclass
 class HPSv3PPQuantizedInferencer:
     model: Qwen3VLRewardModelFiLMHybrid
@@ -204,8 +255,9 @@ class HPSv3PPQuantizedInferencer:
         device: str = "cuda",
         quantization_config: BitsAndBytesConfig | None = None,
         dtype=torch.bfloat16,
+        processor_dir: str | None = None,
     ) -> "HPSv3PPQuantizedInferencer":
-        processor = AutoProcessor.from_pretrained(merged_dir, padding_side="right")
+        processor = _load_processor(merged_dir, processor_dir, BASE_MODEL_NAME)
         special_token_ids = processor.tokenizer.convert_tokens_to_ids([SPECIAL_REWARD_TOKEN])
 
         quantization_config = quantization_config or default_bnb_config(compute_dtype=dtype)
@@ -222,12 +274,18 @@ class HPSv3PPQuantizedInferencer:
             attn_implementation="sdpa",
             use_cache=False,
             quantization_config=quantization_config,
-            device_map={"": 0},
+            device_map=_device_map_from_device(device),
         )
         model.eval()
+        _warn_if_not_fp32(model, ["rm_head", *_FP32_COND_ATTRS])
         return cls(model=model, processor=processor, device=device)
 
     def prepare_batch(self, image_paths: Sequence, prompts: Sequence[str]):
+        if len(image_paths) != len(prompts):
+            raise ValueError(
+                f"got {len(image_paths)} images but {len(prompts)} prompts; "
+                "they must pair up 1:1"
+            )
         message_list = []
         for text, image in zip(prompts, image_paths):
             out_message = [

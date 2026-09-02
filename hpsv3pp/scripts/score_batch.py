@@ -23,15 +23,37 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
+def positive_int(value: str) -> int:
+    ivalue = int(value)
+    if ivalue <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}")
+    return ivalue
+
+
+def unit_interval(value: str) -> float:
+    fvalue = float(value)
+    if not 0.0 <= fvalue <= 1.0:
+        raise argparse.ArgumentTypeError(f"must be in [0, 1], got {value!r}")
+    return fvalue
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, help="Path to JSON list of {id, image, prompt} records")
     parser.add_argument("--output", required=True, help="Path to write JSON results")
     parser.add_argument("--merged-dir", required=True, help="Path to the merged bf16 HPSv3++ checkpoint")
-    parser.add_argument("--batch-size", type=int, default=2, help="Images scored per forward pass (VRAM/time tradeoff)")
+    parser.add_argument(
+        "--processor-dir",
+        default=None,
+        help="Where to load the tokenizer/processor from (default: --merged-dir if it "
+        "contains processor files, otherwise the Qwen/Qwen3-VL-8B-Instruct base model)",
+    )
+    parser.add_argument(
+        "--batch-size", type=positive_int, default=2, help="Images scored per forward pass (VRAM/time tradeoff)"
+    )
     parser.add_argument(
         "--iter-step",
-        type=float,
+        type=unit_interval,
         default=0.0,
         help="HPSv3++ conditioning value in [0, 1] (normalized RL-iteration condition); "
         "0.0 = plain preference scoring, as recommended upstream",
@@ -42,7 +64,17 @@ def main() -> None:
         records = json.load(f)
     if not records:
         with open(args.output, "w") as f:
-            json.dump({"scores": [], "load_time_sec": 0.0, "infer_time_sec": 0.0, "peak_vram_gb": 0.0}, f)
+            json.dump(
+                {
+                    "scores": [],
+                    "load_time_sec": 0.0,
+                    "load_peak_vram_gb": 0.0,
+                    "infer_time_sec": 0.0,
+                    "infer_peak_vram_gb": 0.0,
+                },
+                f,
+                indent=2,
+            )
         return
 
     import torch
@@ -54,7 +86,9 @@ def main() -> None:
     torch.cuda.reset_peak_memory_stats(0)
 
     t0 = time.time()
-    inferencer = HPSv3PPQuantizedInferencer.from_merged_dir(args.merged_dir, device="cuda:0")
+    inferencer = HPSv3PPQuantizedInferencer.from_merged_dir(
+        args.merged_dir, device="cuda:0", processor_dir=args.processor_dir
+    )
     load_time = time.time() - t0
     load_peak_gb = torch.cuda.max_memory_allocated(0) / 1e9
     print(f"Loaded 4-bit HPSv3++ in {load_time:.1f}s, peak VRAM after load: {load_peak_gb:.2f} GB")

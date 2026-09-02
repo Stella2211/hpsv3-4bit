@@ -22,6 +22,12 @@ from src.evaluation.hpsv3_quantized import HPSv3QuantizedInferencer
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--merged-dir", required=True, help="Path to the merged bf16 HPSv3 checkpoint")
+    parser.add_argument(
+        "--processor-dir",
+        default=None,
+        help="Where to load the tokenizer/processor from (default: --merged-dir if it "
+        "contains processor files, otherwise the Qwen/Qwen2-VL-7B-Instruct base model)",
+    )
     parser.add_argument("--image", action="append", required=True, help="Image path (repeatable)")
     parser.add_argument(
         "--prompt",
@@ -45,7 +51,9 @@ if __name__ == "__main__":
     torch.cuda.reset_peak_memory_stats(0)
 
     t0 = time.time()
-    inferencer = HPSv3QuantizedInferencer.from_merged_dir(args.merged_dir, device="cuda:0")
+    inferencer = HPSv3QuantizedInferencer.from_merged_dir(
+        args.merged_dir, device="cuda:0", processor_dir=args.processor_dir
+    )
     load_time = time.time() - t0
     load_peak_gb = torch.cuda.max_memory_allocated(0) / 1e9
     print(f"Loaded 4-bit model in {load_time:.1f}s, peak VRAM after load: {load_peak_gb:.2f} GB")
