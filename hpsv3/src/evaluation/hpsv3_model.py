@@ -12,6 +12,8 @@ against the newer transformers version this project uses. Importing only
 this class avoids that whole dependency chain.
 
 Source: https://github.com/MizzenAI/HPSv3 (MIT license)
+Copyright (c) 2024 HPSv3 Team. See THIRD_PARTY_NOTICES.md at the repository
+root for the full upstream license text.
 """
 
 from typing import List, Optional
