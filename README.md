@@ -5,18 +5,28 @@ Run the [HPSv3](https://github.com/MizzenAI/HPSv3) and
 reward models on a single 12GB GPU (e.g. RTX 3060) using bitsandbytes NF4
 4-bit quantization.
 
-- **HPSv3** (Qwen2-VL-7B backbone, MIT) — ~8.7GB peak VRAM
+- **HPSv3** (Qwen2-VL-7B backbone) — ~8.7GB peak VRAM
 - **HPSv3++** (Qwen3-VL-8B backbone) — **7.11GB peak VRAM** (6.64GB after
   load), measured on an RTX 3060 12GB
 
+Licensing, briefly (details under [Licensing notes](#licensing-notes-important)):
+
+- **Code**: this repository is MIT; the HPSv3 code it adapts
+  (MizzenAI/HPSv3) is also MIT. The HPSv3++ code repository has no license
+  file and is only referenced as a submodule, not redistributed.
+- **Base models**: Qwen2-VL-7B-Instruct and Qwen3-VL-8B-Instruct are
+  Apache-2.0.
+- **Fine-tuned weights**: not redistributed here; downloaded from Hugging
+  Face under the license stated on each model card.
+
 ## Why this exists
 
-Both models ship as full-precision checkpoints (~17GB) that upstream applies
-via `load_state_dict(strict=True)` on a full-precision skeleton. That is
-incompatible with loading directly under bitsandbytes quantization: packed
-4-bit weights have different shapes than the full-precision state dict, so
-quantize-then-apply fails with shape mismatches. This repo implements the
-two-stage workaround:
+Both models ship as full-precision checkpoints (~17GB), which the upstream
+code loads into a full-precision skeleton via `load_state_dict(strict=True)`.
+That is incompatible with loading directly under bitsandbytes quantization:
+packed 4-bit weights have different shapes than the full-precision state
+dict, so quantize-then-apply fails with shape mismatches. This repo
+implements the two-stage workaround:
 
 1. **One-time CPU-only merge**: build a bf16 skeleton, apply the released
    checkpoint with strict shape checking, `save_pretrained()` to disk.
@@ -76,6 +86,7 @@ CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/score_batch.py \
     --merged-dir /path/to/hpsv3-merged-bf16 \
     --input records.json --output scores.json
 # records.json: [{"id": ..., "image": "/path/img.png", "prompt": "..."}, ...]
+# (relative image paths are resolved against the current working directory)
 ```
 
 There is also `hpsv3/scripts/smoke_test.py` for a quick check on a couple of
@@ -92,6 +103,13 @@ huggingface-cli download bdsqlsz/HPSV3-PlusPLus-BF16 --local-dir /path/to/hpsv3p
 CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py \
     --merged-dir /path/to/hpsv3pp-bf16 --input records.json --output scores.json
 ```
+
+Note: the bdsqlsz export contains only `config.json` and the weight
+safetensors — no tokenizer/processor files. The scripts handle this
+automatically: when the merged dir has no processor files, the processor is
+loaded from the base model (`Qwen/Qwen3-VL-8B-Instruct`, downloaded from the
+Hub) and the reward token is re-added. Pass `--processor-dir` (or the
+`processor_dir=` argument in the Python API) to load it from somewhere else.
 
 `score_batch.py` supports `--iter-step` (HPSv3++'s normalized RL-iteration
 conditioning value in [0, 1]; default 0.0 = plain preference scoring, as
@@ -128,12 +146,20 @@ has the same interface (plus an `iter_step` argument on `score()`).
 | HPSv3   | ~58s      | 6.10GB           | 8.66GB                |
 | HPSv3++ | ~60s      | 6.64GB           | 7.11GB                |
 
+Measurement notes: VRAM figures are `torch.cuda.max_memory_allocated()`
+(PyTorch tensor allocations only — the CUDA context/driver overhead and
+allocator-reserved-but-unused memory are not included, so `nvidia-smi` will
+report more). Measured at batch size 4 with the pinned CUDA 12.4 / PyTorch
+wheels; exact numbers vary with batch size, image resolution, and
+CUDA/PyTorch versions.
+
 ## Licensing notes (IMPORTANT)
 
 - Code in this repository: MIT (see `LICENSE`).
 - `hpsv3/src/evaluation/hpsv3_model.py` contains a model class adapted from
   [MizzenAI/HPSv3](https://github.com/MizzenAI/HPSv3) (MIT); attribution is
-  preserved in the file header.
+  preserved in the file header, and the upstream copyright notice and full
+  MIT license text are reproduced in `THIRD_PARTY_NOTICES.md`.
 - **The HPSv3++ code repository has no LICENSE file** on GitHub. For that
   reason its code is referenced only as a pinned git submodule and is NOT
   redistributed here; whether and how you use that code is your own decision

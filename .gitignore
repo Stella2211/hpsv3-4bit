@@ -5,11 +5,23 @@
 __pycache__/
 *.pyc
 *.egg-info/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# Logs / OS cruft
+*.log
+.DS_Store
 
 # Scoring inputs/outputs (records.json, scores.json, ...)
 **/scripts/*.json
 
-# Merged model outputs (should live outside the repo, but just in case)
+# Model weights / merged outputs (should live outside the repo, but just in case)
 *.safetensors
 *.pth
+*.pt
+*.bin
+*.ckpt
+*.onnx
+*.gguf
 MERGE_COMPLETE
