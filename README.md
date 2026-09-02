@@ -1,6 +1,151 @@
 # hpsv3-4bit
 
-Run the HPSv3 and HPSv3++ image-quality reward models on a single 12GB GPU
-(e.g. RTX 3060) using bitsandbytes NF4 4-bit quantization.
+Run the [HPSv3](https://github.com/MizzenAI/HPSv3) and
+[HPSv3++](https://github.com/PlantPotatoOnMoon/HPSv3-PlusPlus) image-quality
+reward models on a single 12GB GPU (e.g. RTX 3060) using bitsandbytes NF4
+4-bit quantization.
 
-Full README coming with the initial code drop.
+- **HPSv3** (Qwen2-VL-7B backbone, MIT) — ~8.7GB peak VRAM
+- **HPSv3++** (Qwen3-VL-8B backbone) — **7.11GB peak VRAM** (6.64GB after
+  load), measured on an RTX 3060 12GB
+
+## Why this exists
+
+Both models ship as full-precision checkpoints (~17GB) that upstream applies
+via `load_state_dict(strict=True)` on a full-precision skeleton. That is
+incompatible with loading directly under bitsandbytes quantization: packed
+4-bit weights have different shapes than the full-precision state dict, so
+quantize-then-apply fails with shape mismatches. This repo implements the
+two-stage workaround:
+
+1. **One-time CPU-only merge**: build a bf16 skeleton, apply the released
+   checkpoint with strict shape checking, `save_pretrained()` to disk.
+2. **4-bit reload**: load that merged dir with
+   `BitsAndBytesConfig(load_in_4bit=True, nf4, double-quant)`, which
+   quantizes weights as they stream from disk.
+
+The reward head and conditioning modules stay in fp32, matching upstream.
+(For HPSv3++ a community pre-merged bf16 safetensors export exists, so
+step 1 can be skipped there — see Usage.)
+
+## Requirements
+
+- NVIDIA GPU with ~9GB free VRAM (HPSv3) / ~8GB (HPSv3++). CUDA 12.4 wheels
+  are pinned via the `pytorch-cu124` index in each `pyproject.toml`; edit
+  that index for other CUDA versions.
+- ~40GB free disk per model (HF cache + merged bf16 copy) and ~40GB host RAM
+  for the merge step (CPU-only).
+- [uv](https://docs.astral.sh/uv/), Python 3.12.
+
+## Layout
+
+Two independent uv projects — they cannot share a venv, because HPSv3 needs
+`transformers==4.46.3` (the last release with the old flat Qwen2VL module
+layout its checkpoint expects) while HPSv3++ needs `transformers==4.57.0`
+(Qwen3-VL support):
+
+- `hpsv3/` … HPSv3
+- `hpsv3pp/` … HPSv3++ (+ upstream code as a pinned git submodule under
+  `hpsv3pp/third_party/HPSv3-PlusPlus`)
+
+There is deliberately no root `pyproject.toml` / uv workspace: a shared lock
+would force the two transformers pins to conflict.
+
+Note: `transformers==4.57.0` is yanked on PyPI (packaging issue), but an
+exact pin still installs fine with `uv sync` — no functional impact observed.
+
+## Install
+
+```bash
+git clone --recurse-submodules https://github.com/<user>/hpsv3-4bit
+cd hpsv3-4bit/hpsv3   && uv sync
+cd ../hpsv3pp         && uv sync
+```
+
+(If you cloned without submodules: `git submodule update --init`.)
+
+## Usage — HPSv3
+
+```bash
+# 1. one-time merge (CPU only; downloads Qwen2-VL-7B + HPSv3.safetensors)
+uv run --project hpsv3 hpsv3/scripts/merge_bf16.py \
+    --output-dir /path/to/hpsv3-merged-bf16
+
+# 2. score images
+CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/score_batch.py \
+    --merged-dir /path/to/hpsv3-merged-bf16 \
+    --input records.json --output scores.json
+# records.json: [{"id": ..., "image": "/path/img.png", "prompt": "..."}, ...]
+```
+
+There is also `hpsv3/scripts/smoke_test.py` for a quick check on a couple of
+images (`--image ... --prompt ...`, repeatable).
+
+## Usage — HPSv3++
+
+Recommended: download the pre-merged bf16 safetensors export
+([bdsqlsz/HPSV3-PlusPLus-BF16](https://huggingface.co/bdsqlsz/HPSV3-PlusPLus-BF16),
+Apache-2.0) and load it in 4-bit directly — no merge step needed:
+
+```bash
+huggingface-cli download bdsqlsz/HPSV3-PlusPLus-BF16 --local-dir /path/to/hpsv3pp-bf16
+CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py \
+    --merged-dir /path/to/hpsv3pp-bf16 --input records.json --output scores.json
+```
+
+`score_batch.py` supports `--iter-step` (HPSv3++'s normalized RL-iteration
+conditioning value in [0, 1]; default 0.0 = plain preference scoring, as
+recommended upstream).
+
+Alternative: merge the official checkpoint
+([Junjun2333/HPSv3-PlusPlus](https://huggingface.co/Junjun2333/HPSv3-PlusPlus),
+`hpsv3++.pth`) yourself — CPU-only, ~40GB RAM — then point `--merged-dir` at
+the output:
+
+```bash
+uv run --project hpsv3pp hpsv3pp/scripts/merge_bf16.py \
+    --output-dir /path/to/hpsv3pp-merged-bf16
+```
+
+## Python API
+
+```python
+# inside the hpsv3 project (uv run --project hpsv3 python ...)
+import sys; sys.path.insert(0, "hpsv3")
+from src.evaluation.hpsv3_quantized import HPSv3QuantizedInferencer
+
+inf = HPSv3QuantizedInferencer.from_merged_dir("/path/to/hpsv3-merged-bf16")
+scores = inf.score(["img.png"], ["a photo of ..."])
+```
+
+`HPSv3PPQuantizedInferencer` in `hpsv3pp/src/evaluation/hpsv3pp_quantized.py`
+has the same interface (plus an `iter_step` argument on `score()`).
+
+## Performance (RTX 3060 12GB)
+
+| model   | load time | peak VRAM (load) | peak VRAM (inference) |
+|---------|-----------|------------------|-----------------------|
+| HPSv3   | ~58s      | 6.10GB           | 8.66GB                |
+| HPSv3++ | ~60s      | 6.64GB           | 7.11GB                |
+
+## Licensing notes (IMPORTANT)
+
+- Code in this repository: MIT (see `LICENSE`).
+- `hpsv3/src/evaluation/hpsv3_model.py` contains a model class adapted from
+  [MizzenAI/HPSv3](https://github.com/MizzenAI/HPSv3) (MIT); attribution is
+  preserved in the file header.
+- **The HPSv3++ code repository has no LICENSE file** on GitHub. For that
+  reason its code is referenced only as a pinned git submodule and is NOT
+  redistributed here; whether and how you use that code is your own decision
+  — review the upstream repository. (The HPSv3++ *weights* on Hugging Face —
+  both Junjun2333/HPSv3-PlusPlus and the pre-merged
+  bdsqlsz/HPSV3-PlusPLus-BF16 — are published under Apache-2.0.)
+- Model weights are NOT redistributed; they are downloaded from the original
+  Hugging Face repositories under their own licenses.
+
+## Acknowledgements
+
+- [HPSv3: Towards Wide-Spectrum Human Preference Score](https://github.com/MizzenAI/HPSv3) (MizzenAI)
+- [HPSv3++](https://github.com/PlantPotatoOnMoon/HPSv3-PlusPlus) (arXiv:2606.14657)
+- [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct) / [Qwen3-VL](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) (Alibaba Qwen team)
+- [bitsandbytes](https://github.com/bitsandbytes-foundation/bitsandbytes)
