@@ -1,0 +1,29 @@
+[project]
+name = "hpsv3-4bit"
+version = "0.1.0"
+description = "4-bit (bitsandbytes NF4) inference for the HPSv3 reward model (Qwen2-VL-7B backbone) on a 12GB GPU. Kept as its own uv project because HPSv3's released checkpoint requires transformers==4.46.3 (the last version with the old flat Qwen2VL module layout), which cannot coexist with the transformers==4.57.0 needed by the sibling HPSv3++ project."
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
+    "transformers==4.46.3",
+    "accelerate>=1.14.0",
+    "bitsandbytes>=0.50.0",
+    "huggingface-hub<1.0",
+    "opencv-python-headless>=5.0.0.93",
+    "pillow>=12.2.0",
+    "protobuf>=7.35.1",
+    "pyyaml>=6.0.3",
+    "qwen-vl-utils>=0.0.14",
+    "safetensors>=0.8.0",
+    "sentencepiece>=0.2.2",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
