@@ -47,6 +47,15 @@ def positive_int(value: str) -> int:
     return ivalue
 
 
+def prompt_ext(value: str) -> str:
+    ext = value if value.startswith(".") else "." + value
+    if ext.lower() in IMAGE_EXTS:
+        raise argparse.ArgumentTypeError(
+            f"must not be an image extension ({', '.join(sorted(IMAGE_EXTS))}), got {value!r}"
+        )
+    return ext
+
+
 def load_records(input_path: str, prompt_ext: str = ".txt", no_prompt: bool = False) -> list[dict]:
     """Build scoring records from `input_path`.
 
@@ -102,6 +111,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--prompt-ext",
+        type=prompt_ext,
         default=".txt",
         help="Extension of per-image prompt files in directory input mode (default: .txt)",
     )

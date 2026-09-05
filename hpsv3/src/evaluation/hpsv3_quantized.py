@@ -365,6 +365,14 @@ class HPSv3QuantizedInferencer:
         ``padding_side="right"`` for reward scoring, which is the wrong
         padding side for batched generation.
         """
+        if getattr(self, "_captioning", False):
+            raise RuntimeError("caption() is not reentrant: the model's forward() is temporarily rebound")
+        self._captioning = True
+        # If something (e.g. Accelerate) already set an instance-level
+        # forward, keep it around and put it back afterwards instead of
+        # unconditionally deleting.
+        had_instance_forward = "forward" in vars(self.model)
+        prev_forward = vars(self.model).get("forward")
         captions: List[str] = []
         self.model.forward = MethodType(Qwen2VLForConditionalGeneration.forward, self.model)
         try:
@@ -404,5 +412,10 @@ class HPSv3QuantizedInferencer:
                 text = self.processor.tokenizer.decode(out[0][input_len:], skip_special_tokens=True).strip()
                 captions.append(text)
         finally:
-            del self.model.forward  # restore the reward-model forward
+            # Restore the reward-model forward.
+            if had_instance_forward:
+                self.model.forward = prev_forward
+            else:
+                del self.model.forward
+            self._captioning = False
         return captions

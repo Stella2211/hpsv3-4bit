@@ -46,6 +46,15 @@ def positive_int(value: str) -> int:
     return ivalue
 
 
+def prompt_ext(value: str) -> str:
+    ext = value if value.startswith(".") else "." + value
+    if ext.lower() in IMAGE_EXTS:
+        raise argparse.ArgumentTypeError(
+            f"must not be an image extension ({', '.join(sorted(IMAGE_EXTS))}), got {value!r}"
+        )
+    return ext
+
+
 def unit_interval(value: str) -> float:
     fvalue = float(value)
     if not 0.0 <= fvalue <= 1.0:
@@ -115,6 +124,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--prompt-ext",
+        type=prompt_ext,
         default=".txt",
         help="Extension of per-image prompt files in directory input mode (default: .txt)",
     )
