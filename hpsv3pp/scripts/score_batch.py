@@ -1,8 +1,21 @@
 """Batch HPSv3++ scoring CLI, mirroring hpsv3/scripts/score_batch.py.
 
-Reads a JSON list of {"id", "image", "prompt", ...} records, loads the
-4-bit HPSv3++ model once, scores every record, and writes
-{"id": ..., "score": ...} results plus timing/VRAM metadata as JSON.
+``--input`` accepts either:
+
+- a JSON file: a list of ``{"id": ..., "image": <path>, "prompt": <text>}``
+  records, or
+- a directory: every image in it (png/jpg/jpeg/webp, case-insensitive) is
+  scored, with the prompt read from a same-named text file next to it
+  (``image.png`` -> ``image.txt``; extension configurable via
+  ``--prompt-ext``). Records get ``id`` = image file name.
+
+With ``--no-prompt``, prompt files / JSON prompts are not required: a short
+caption is generated for each image by the loaded Qwen VL backbone itself
+and used as the scoring prompt (saved to the output as
+``generated_prompt``).
+
+The script loads the 4-bit HPSv3++ model once, scores every record, and
+writes {"id": ..., "score": ...} results plus timing/VRAM metadata as JSON.
 
 Usage (from the repository root):
     CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py \
@@ -12,6 +25,7 @@ Usage (from the repository root):
 Use CUDA_VISIBLE_DEVICES to pick the GPU. HPSv3++ in 4-bit needs ~7.1GB
 peak VRAM.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +35,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def positive_int(value: str) -> int:
@@ -37,9 +53,48 @@ def unit_interval(value: str) -> float:
     return fvalue
 
 
+def load_records(input_path: str, prompt_ext: str = ".txt", no_prompt: bool = False) -> list[dict]:
+    """Build scoring records from `input_path`.
+
+    If it is a directory: enumerate contained images (IMAGE_EXTS,
+    case-insensitive, sorted by name) and read each image's prompt from the
+    same-named `prompt_ext` file (unless `no_prompt`); missing prompt files
+    are reported all at once and abort. If it is a file: parse it as the
+    JSON record list.
+    """
+    path = Path(input_path)
+    if path.is_dir():
+        if not prompt_ext.startswith("."):
+            prompt_ext = "." + prompt_ext
+        images = sorted(p for p in path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
+        if not no_prompt:
+            missing = [p.name for p in images if not p.with_suffix(prompt_ext).is_file()]
+            if missing:
+                raise SystemExit(
+                    f"error: no {prompt_ext} prompt file found for {len(missing)} image(s) in "
+                    f"{path}: {', '.join(missing)}\n"
+                    "Add the missing prompt files, or pass --no-prompt to auto-generate captions."
+                )
+        records = []
+        for p in images:
+            record = {"id": p.name, "image": str(p)}
+            if not no_prompt:
+                record["prompt"] = p.with_suffix(prompt_ext).read_text(encoding="utf-8").strip()
+            records.append(record)
+        return records
+
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, help="Path to JSON list of {id, image, prompt} records")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--input",
+        required=True,
+        help="JSON list of {id, image, prompt} records, or a directory of images "
+        "with same-named prompt text files",
+    )
     parser.add_argument("--output", required=True, help="Path to write JSON results")
     parser.add_argument("--merged-dir", required=True, help="Path to the merged bf16 HPSv3++ checkpoint")
     parser.add_argument(
@@ -58,10 +113,20 @@ def main() -> None:
         help="HPSv3++ conditioning value in [0, 1] (normalized RL-iteration condition); "
         "0.0 = plain preference scoring, as recommended upstream",
     )
+    parser.add_argument(
+        "--prompt-ext",
+        default=".txt",
+        help="Extension of per-image prompt files in directory input mode (default: .txt)",
+    )
+    parser.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="Don't read prompts; instead generate a caption for each image with the "
+        "loaded Qwen VL backbone and score against it (saved as generated_prompt)",
+    )
     args = parser.parse_args()
 
-    with open(args.input) as f:
-        records = json.load(f)
+    records = load_records(args.input, prompt_ext=args.prompt_ext, no_prompt=args.no_prompt)
     if not records:
         with open(args.output, "w") as f:
             json.dump(
@@ -78,6 +143,7 @@ def main() -> None:
         return
 
     import torch
+
     from evaluation.hpsv3pp_quantized import HPSv3PPQuantizedInferencer
 
     assert torch.cuda.is_available(), "CUDA not visible -- check CUDA_VISIBLE_DEVICES"
@@ -101,10 +167,16 @@ def main() -> None:
     for i in range(0, len(records), bs):
         chunk = records[i : i + bs]
         images = [r["image"] for r in chunk]
-        prompts = [r["prompt"] for r in chunk]
+        if args.no_prompt:
+            prompts = inferencer.caption(images)
+        else:
+            prompts = [r["prompt"] for r in chunk]
         scores = inferencer.score(images, prompts, iter_step=args.iter_step)
-        for r, s in zip(chunk, scores):
-            results.append({"id": r["id"], "score": s})
+        for r, p, s in zip(chunk, prompts, scores):
+            row = {"id": r["id"], "score": s}
+            if args.no_prompt:
+                row["generated_prompt"] = p
+            results.append(row)
         print(f"  scored {i + len(chunk)}/{len(records)}", flush=True)
 
     infer_time = time.time() - t0

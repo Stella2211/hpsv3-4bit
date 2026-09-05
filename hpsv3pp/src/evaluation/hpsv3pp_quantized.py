@@ -43,11 +43,12 @@ import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from types import MethodType
 from typing import List, Sequence
 
 import torch
 from PIL import Image
-from transformers import AutoProcessor, BitsAndBytesConfig
+from transformers import AutoProcessor, BitsAndBytesConfig, Qwen3VLForConditionalGeneration
 
 # Ensure the upstream HPSv3++ repo (pinned git submodule) and the trl compat
 # shim are importable.
@@ -81,6 +82,8 @@ REWARD_TOKEN_MODE = "special"
 COND_DIM = 256
 MAX_PIXELS = 256 * 28 * 28
 MIN_PIXELS = 256 * 28 * 28
+
+CAPTION_INSTRUCTION = "Describe this image as a concise text-to-image prompt in one sentence."
 
 # Condition-related submodules that hpsv3/trainer/adaptive.py keeps in fp32
 # (see _create_model_common); we mirror that for the merge step, and also
@@ -334,3 +337,68 @@ class HPSv3PPQuantizedInferencer:
         for each (image, prompt) pair, matching upstream's `rewards[i][0]`."""
         rewards = self.reward(image_paths, prompts, iter_step=iter_step)
         return [r[0].item() for r in rewards]
+
+    @torch.inference_mode()
+    def caption(
+        self,
+        image_paths: Sequence,
+        max_new_tokens: int = 96,
+        instruction: str = CAPTION_INSTRUCTION,
+    ) -> List[str]:
+        """Generate a short text-to-image-style caption for each image using
+        the (4-bit) Qwen3-VL backbone itself, so images without prompts can
+        still be scored (see score_batch.py --no-prompt).
+
+        The merged HPSv3++ checkpoint carries the full ``lm_head`` weights
+        (the merge step verifies the checkpoint against the complete state
+        dict), so the language-model path is real weights, not a random
+        init. The reward subclass overrides ``forward()`` to return pooled
+        reward logits, which would break ``generate()``; the base-class
+        forward is temporarily rebound for the duration of the call,
+        leaving the scoring path untouched.
+
+        Images are processed one at a time: the processor is configured with
+        ``padding_side="right"`` for reward scoring, which is the wrong
+        padding side for batched generation.
+        """
+        captions: List[str] = []
+        self.model.forward = MethodType(Qwen3VLForConditionalGeneration.forward, self.model)
+        try:
+            for image in image_paths:
+                messages = [
+                    [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "image": image,
+                                    "min_pixels": MIN_PIXELS,
+                                    "max_pixels": MAX_PIXELS,
+                                },
+                                {"type": "text", "text": instruction},
+                            ],
+                        }
+                    ]
+                ]
+                image_inputs, _ = process_vision_info(messages)
+                batch = self.processor(
+                    text=self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True),
+                    images=image_inputs,
+                    padding=True,
+                    return_tensors="pt",
+                )
+                batch = {k: (v.to(self.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
+                input_len = batch["input_ids"].shape[1]
+                out = self.model.generate(
+                    **batch,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    use_cache=True,
+                    pad_token_id=self.processor.tokenizer.pad_token_id,
+                )
+                text = self.processor.tokenizer.decode(out[0][input_len:], skip_special_tokens=True).strip()
+                captions.append(text)
+        finally:
+            del self.model.forward  # restore the reward-model forward
+        return captions
