@@ -35,8 +35,8 @@ implements the two-stage workaround:
    quantizes weights as they stream from disk.
 
 The reward head and conditioning modules stay in fp32, matching upstream.
-(For HPSv3++ a community pre-merged bf16 safetensors export exists, so
-step 1 can be skipped there — see Usage.)
+(For both models a community pre-merged bf16 safetensors export exists, so
+step 1 can usually be skipped — see Usage.)
 
 ## Requirements
 
@@ -67,7 +67,7 @@ exact pin still installs fine with `uv sync` — no functional impact observed.
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/<user>/hpsv3-4bit
+git clone --recurse-submodules https://github.com/Stella2211/hpsv3-4bit
 cd hpsv3-4bit/hpsv3   && uv sync
 cd ../hpsv3pp         && uv sync
 ```
@@ -76,17 +76,30 @@ cd ../hpsv3pp         && uv sync
 
 ## Usage — HPSv3
 
-```bash
-# 1. one-time merge (CPU only; downloads Qwen2-VL-7B + HPSv3.safetensors)
-uv run --project hpsv3 hpsv3/scripts/merge_bf16.py \
-    --output-dir /path/to/hpsv3-merged-bf16
+Recommended: download the pre-merged bf16 export
+([sitatech/HPSv3](https://huggingface.co/sitatech/HPSv3), a full merged
+export with tokenizer/processor files included) and load it in 4-bit
+directly — no merge step needed:
 
-# 2. score images
+```bash
+huggingface-cli download sitatech/HPSv3 --local-dir /path/to/hpsv3-bf16
 CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/score_batch.py \
-    --merged-dir /path/to/hpsv3-merged-bf16 \
+    --merged-dir /path/to/hpsv3-bf16 \
     --input records.json --output scores.json
 # records.json: [{"id": ..., "image": "/path/img.png", "prompt": "..."}, ...]
 # (relative image paths are resolved against the current working directory)
+```
+
+Note: sitatech/HPSv3 is a community re-upload without a license tag on its
+model card; the original HPSv3 weights it derives from
+([MizzenAI/HPSv3](https://huggingface.co/MizzenAI/HPSv3)) are Apache-2.0.
+
+Alternative: merge the official checkpoint yourself (CPU-only; downloads
+Qwen2-VL-7B + `HPSv3.safetensors`), then point `--merged-dir` at the output:
+
+```bash
+uv run --project hpsv3 hpsv3/scripts/merge_bf16.py \
+    --output-dir /path/to/hpsv3-merged-bf16
 ```
 
 There is also `hpsv3/scripts/smoke_test.py` for a quick check on a couple of
@@ -124,6 +137,34 @@ the output:
 uv run --project hpsv3pp hpsv3pp/scripts/merge_bf16.py \
     --output-dir /path/to/hpsv3pp-merged-bf16
 ```
+
+## Input modes (both scorers)
+
+`--input` for both `score_batch.py` scripts accepts either a JSON file or a
+directory:
+
+- **JSON file**: a list of `{"id": ..., "image": "/path/img.png",
+  "prompt": "..."}` records (as in the examples above).
+- **Directory**: every image in the directory (`.png`/`.jpg`/`.jpeg`/`.webp`,
+  case-insensitive) is scored, and each image's prompt is read from a
+  same-named text file next to it (`image.png` → `image.txt`). The text file
+  extension can be changed with `--prompt-ext` (default `.txt`). Images
+  without a matching prompt file are listed and the run aborts. Output
+  records use the image file name as `id`.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/score_batch.py \
+    --merged-dir /path/to/hpsv3-bf16 \
+    --input /path/to/image_dir --output scores.json
+```
+
+With `--no-prompt`, no prompts are needed at all (in either mode): the
+loaded Qwen VL backbone itself first generates a one-sentence caption for
+each image, which is then used as the scoring prompt and saved to the
+output record as `generated_prompt`. This is a convenience for scoring
+unlabeled image sets; the captions come from the reward-finetuned model's
+language head, so review the saved `generated_prompt` values if scores look
+surprising.
 
 ## Python API
 
