@@ -82,7 +82,7 @@ export with tokenizer/processor files included) and load it in 4-bit
 directly — no merge step needed:
 
 ```bash
-huggingface-cli download sitatech/HPSv3 --local-dir /path/to/hpsv3-bf16
+uvx hf download sitatech/HPSv3 --local-dir /path/to/hpsv3-bf16
 CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/score_batch.py \
     --merged-dir /path/to/hpsv3-bf16 \
     --input records.json --output scores.json
@@ -112,7 +112,7 @@ Recommended: download the pre-merged bf16 safetensors export
 Apache-2.0) and load it in 4-bit directly — no merge step needed:
 
 ```bash
-huggingface-cli download bdsqlsz/HPSV3-PlusPLus-BF16 --local-dir /path/to/hpsv3pp-bf16
+uvx hf download bdsqlsz/HPSV3-PlusPLus-BF16 --local-dir /path/to/hpsv3pp-bf16
 CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py \
     --merged-dir /path/to/hpsv3pp-bf16 --input records.json --output scores.json
 ```
