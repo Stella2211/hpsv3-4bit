@@ -40,9 +40,11 @@ step 1 can usually be skipped — see Usage.)
 
 ## Requirements
 
-- NVIDIA GPU with ~9GB free VRAM (HPSv3) / ~8GB (HPSv3++). CUDA 12.4 wheels
-  are pinned via the `pytorch-cu124` index in each `pyproject.toml`; edit
-  that index for other CUDA versions.
+- NVIDIA GPU with ~9GB free VRAM (HPSv3) / ~8GB (HPSv3++). CUDA 13.0 wheels
+  are pinned via the `pytorch-cu130` index in each `pyproject.toml`; they
+  cover Turing through Blackwell (sm_75–sm_120, e.g. RTX 3060 and RTX 50
+  series) and need an NVIDIA driver new enough for CUDA 13 (r580+). For
+  older drivers, edit that index (e.g. to `cu126`).
 - ~40GB free disk per model (HF cache + merged bf16 copy) and ~40GB host RAM
   for the merge step (CPU-only).
 - [uv](https://docs.astral.sh/uv/), Python 3.12.
@@ -190,7 +192,7 @@ has the same interface (plus an `iter_step` argument on `score()`).
 Measurement notes: VRAM figures are `torch.cuda.max_memory_allocated()`
 (PyTorch tensor allocations only — the CUDA context/driver overhead and
 allocator-reserved-but-unused memory are not included, so `nvidia-smi` will
-report more). Measured at batch size 4 with the pinned CUDA 12.4 / PyTorch
+report more). Measured at batch size 4 with CUDA 12.4 / PyTorch 2.6
 wheels; exact numbers vary with batch size, image resolution, and
 CUDA/PyTorch versions.
 
