@@ -1,220 +1,177 @@
 # hpsv3-4bit
 
-Run the [HPSv3](https://github.com/MizzenAI/HPSv3) and
-[HPSv3++](https://github.com/PlantPotatoOnMoon/HPSv3-PlusPlus) image-quality
-reward models on a single 12GB GPU (e.g. RTX 3060) using bitsandbytes NF4
-4-bit quantization.
+Run HPSv3 and HPSv3++ image/prompt preference scoring locally on a single
+12 GB NVIDIA GPU with bitsandbytes NF4 4-bit models.
 
-- **HPSv3** (Qwen2-VL-7B backbone) — ~8.7GB peak VRAM
-- **HPSv3++** (Qwen3-VL-8B backbone) — **7.11GB peak VRAM** (6.64GB after
-  load), measured on an RTX 3060 12GB
+Tested on 12 GB VRAM. An 8 GB GPU may also work with smaller batches, but
+8 GB operation has not been verified. Actual memory use depends on image
+resolution, batch size and runtime overhead.
 
-Licensing, briefly (details under [Licensing notes](#licensing-notes-important)):
+The first run automatically downloads the published quantized model from
+Hugging Face; subsequent runs use the cache.
 
-- **Code**: this repository is MIT; the HPSv3 code it adapts
-  (MizzenAI/HPSv3) is also MIT. The HPSv3++ code repository has no license
-  file and is only referenced as a submodule, not redistributed.
-- **Base models**: Qwen2-VL-7B-Instruct and Qwen3-VL-8B-Instruct are
-  Apache-2.0.
-- **Fine-tuned weights**: not redistributed here; downloaded from Hugging
-  Face under the license stated on each model card.
-
-## Why this exists
-
-Both models ship as full-precision checkpoints (~17GB), which the upstream
-code loads into a full-precision skeleton via `load_state_dict(strict=True)`.
-That is incompatible with loading directly under bitsandbytes quantization:
-packed 4-bit weights have different shapes than the full-precision state
-dict, so quantize-then-apply fails with shape mismatches. This repo
-implements the two-stage workaround:
-
-1. **One-time CPU-only merge**: build a bf16 skeleton, apply the released
-   checkpoint with strict shape checking, `save_pretrained()` to disk.
-2. **4-bit reload**: load that merged dir with
-   `BitsAndBytesConfig(load_in_4bit=True, nf4, double-quant)`, which
-   quantizes weights as they stream from disk.
-
-The reward head and conditioning modules stay in fp32, matching upstream.
-(For both models a community pre-merged bf16 safetensors export exists, so
-step 1 can usually be skipped — see Usage.)
+| Scorer | Backbone | Default model | Weight download |
+|---|---|---|---:|
+| HPSv3 | Qwen2-VL-7B | [stella221125/HPSv3-bnb-NF4](https://huggingface.co/stella221125/HPSv3-bnb-NF4) | 5.908 GB |
+| HPSv3++ | Qwen3-VL-8B | [stella221125/HPSv3-PlusPlus-bnb-NF4](https://huggingface.co/stella221125/HPSv3-PlusPlus-bnb-NF4) | 6.454 GB |
 
 ## Requirements
 
-- NVIDIA GPU with ~9GB free VRAM (HPSv3) / ~8GB (HPSv3++). CUDA 13.0 wheels
-  are pinned via the `pytorch-cu130` index in each `pyproject.toml`; they
-  cover Turing through Blackwell (sm_75–sm_120, e.g. RTX 3060 and RTX 50
-  series) and need an NVIDIA driver new enough for CUDA 13 (r580+). For
-  older drivers, edit that index (e.g. to `cu126`).
-- ~40GB free disk per model (HF cache + merged bf16 copy) and ~40GB host RAM
-  for the merge step (CPU-only).
-- [uv](https://docs.astral.sh/uv/), Python 3.12.
-
-## Layout
-
-Two independent uv projects — they cannot share a venv, because HPSv3 needs
-`transformers==4.46.3` (the last release with the old flat Qwen2VL module
-layout its checkpoint expects) while HPSv3++ needs `transformers==4.57.0`
-(Qwen3-VL support):
-
-- `hpsv3/` … HPSv3
-- `hpsv3pp/` … HPSv3++ (+ upstream code as a pinned git submodule under
-  `hpsv3pp/third_party/HPSv3-PlusPlus`)
-
-There is deliberately no root `pyproject.toml` / uv workspace: a shared lock
-would force the two transformers pins to conflict.
-
-Note: `transformers==4.57.0` is yanked on PyPI (packaging issue), but an
-exact pin still installs fine with `uv sync` — no functional impact observed.
+- NVIDIA GPU with CUDA support. A 12 GB card provides room for model weights
+  and inference; memory use depends on image resolution and batch size.
+- An NVIDIA driver compatible with CUDA 13.0, the PyTorch wheel index
+  configured in both projects.
+- Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
+- About 8 GB disk space per model, plus Python environments and download
+  temporary space.
 
 ## Install
 
 ```bash
 git clone --recurse-submodules https://github.com/Stella2211/hpsv3-4bit
-cd hpsv3-4bit/hpsv3   && uv sync
-cd ../hpsv3pp         && uv sync
+cd hpsv3-4bit
 ```
 
-(If you cloned without submodules: `git submodule update --init`.)
-
-## Usage — HPSv3
-
-Recommended: download the pre-merged bf16 export
-([sitatech/HPSv3](https://huggingface.co/sitatech/HPSv3), a full merged
-export with tokenizer/processor files included) and load it in 4-bit
-directly — no merge step needed:
+Install the scorer you want to use (or run both commands for both scorers):
 
 ```bash
-uvx hf download sitatech/HPSv3 --local-dir /path/to/hpsv3-bf16
-CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/score_batch.py \
-    --merged-dir /path/to/hpsv3-bf16 \
-    --input records.json --output scores.json
-# records.json: [{"id": ..., "image": "/path/img.png", "prompt": "..."}, ...]
-# (relative image paths are resolved against the current working directory)
+uv sync --project hpsv3
+uv sync --project hpsv3pp
 ```
 
-Note: sitatech/HPSv3 is a community re-upload without a license tag on its
-model card; the original HPSv3 weights it derives from
-([MizzenAI/HPSv3](https://huggingface.co/MizzenAI/HPSv3)) are Apache-2.0.
+The projects use separate environments because they require different
+Transformers versions: 4.46.3 for HPSv3 and 4.57.0 for HPSv3++.
+HPSv3++ also requires the pinned upstream submodule. If you cloned without
+submodules, run `git submodule update --init`.
 
-Alternative: merge the official checkpoint yourself (CPU-only; downloads
-Qwen2-VL-7B + `HPSv3.safetensors`), then point `--merged-dir` at the output:
+## Score images
+
+Run commands from the repository root. Create `records.json` with image/prompt pairs:
+
+```json
+[
+  {"id": "cat", "image": "images/cat.png", "prompt": "a cat sitting by a window"},
+  {"id": "dog", "image": "images/dog.png", "prompt": "a dog playing in a park"}
+]
+```
+
+Relative image paths are resolved from the current working directory.
+Run either scorer:
 
 ```bash
-uv run --project hpsv3 hpsv3/scripts/merge_bf16.py \
-    --output-dir /path/to/hpsv3-merged-bf16
+uv run --project hpsv3 hpsv3/scripts/score_batch.py --input records.json --output scores.json
+uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py --input records.json --output scores.json
 ```
 
-There is also `hpsv3/scripts/smoke_test.py` for a quick check on a couple of
-images (`--image ... --prompt ...`, repeatable).
+Each command writes a JSON object with a `scores` list of `id`/`score` pairs,
+plus load time, inference time and peak GPU memory measurements. Choose
+separate output paths to keep results from both models.
 
-## Usage — HPSv3++
+### Image directories
 
-Recommended: download the pre-merged bf16 safetensors export
-([bdsqlsz/HPSV3-PlusPLus-BF16](https://huggingface.co/bdsqlsz/HPSV3-PlusPLus-BF16),
-Apache-2.0) and load it in 4-bit directly — no merge step needed:
+`--input` also accepts a directory of `.png`, `.jpg`, `.jpeg` or `.webp`
+images (case-insensitive, non-recursive). Each image needs a matching prompt
+file: `image.png` uses `image.txt`. Missing prompt files abort the run.
+Use `--prompt-ext` to change the text-file extension. Output IDs are image
+file names.
 
 ```bash
-uvx hf download bdsqlsz/HPSV3-PlusPLus-BF16 --local-dir /path/to/hpsv3pp-bf16
-CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py \
-    --merged-dir /path/to/hpsv3pp-bf16 --input records.json --output scores.json
+uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py --input images --output scores.json
 ```
 
-Note: the bdsqlsz export contains only `config.json` and the weight
-safetensors — no tokenizer/processor files. The scripts handle this
-automatically: when the merged dir has no processor files, the processor is
-loaded from the base model (`Qwen/Qwen3-VL-8B-Instruct`, downloaded from the
-Hub) and the reward token is re-added. Pass `--processor-dir` (or the
-`processor_dir=` argument in the Python API) to load it from somewhere else.
+### Images without prompts
 
-`score_batch.py` supports `--iter-step` (HPSv3++'s normalized RL-iteration
-conditioning value in [0, 1]; default 0.0 = plain preference scoring, as
-recommended upstream).
-
-Alternative: merge the official checkpoint
-([Junjun2333/HPSv3-PlusPlus](https://huggingface.co/Junjun2333/HPSv3-PlusPlus),
-`hpsv3++.pth`) yourself — CPU-only, ~40GB RAM — then point `--merged-dir` at
-the output:
+Add `--no-prompt` to generate a caption for each image and use it as the
+scoring prompt. This works with directory and JSON input; prompt files or
+JSON `prompt` fields are then unnecessary. Captions are saved as
+`generated_prompt` in the output. Review them: the captions come from the
+reward-finetuned model and may misdescribe an image.
 
 ```bash
-uv run --project hpsv3pp hpsv3pp/scripts/merge_bf16.py \
-    --output-dir /path/to/hpsv3pp-merged-bf16
+uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py --input images --no-prompt --output scores.json
 ```
 
-## Input modes (both scorers)
+### Batch size and conditioning
 
-`--input` for both `score_batch.py` scripts accepts either a JSON file or a
-directory:
+`--batch-size` defaults to 4 for HPSv3 and 2 for HPSv3++. Reduce it if you run
+out of GPU memory. Use `CUDA_VISIBLE_DEVICES` to select a GPU.
 
-- **JSON file**: a list of `{"id": ..., "image": "/path/img.png",
-  "prompt": "..."}` records (as in the examples above).
-- **Directory**: every image in the directory (`.png`/`.jpg`/`.jpeg`/`.webp`,
-  case-insensitive) is scored, and each image's prompt is read from a
-  same-named text file next to it (`image.png` → `image.txt`). The text file
-  extension can be changed with `--prompt-ext` (default `.txt`). Images
-  without a matching prompt file are listed and the run aborts. Output
-  records use the image file name as `id`.
+HPSv3++ accepts `--iter-step` in [0, 1], defaulting to `0.0` for plain
+preference scoring. Its conditioning can depend on other images in the
+batch, so keep batch size, image order, prompts and iteration setting fixed
+when comparing scores.
 
-```bash
-CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/score_batch.py \
-    --merged-dir /path/to/hpsv3-bf16 \
-    --input /path/to/image_dir --output scores.json
-```
+## Model selection and offline use
 
-With `--no-prompt`, no prompts are needed at all (in either mode): the
-loaded Qwen VL backbone itself first generates a one-sentence caption for
-each image, which is then used as the scoring prompt and saved to the
-output record as `generated_prompt`. This is a convenience for scoring
-unlabeled image sets; the captions come from the reward-finetuned model's
-language head, so review the saved `generated_prompt` values if scores look
-surprising.
+Both scorers accept:
+
+| Option | Purpose |
+|---|---|
+| `--model PATH_OR_REPO` | Load a local checkpoint or another compatible Hugging Face model repository. |
+| `--revision REVISION` | Select a Hub branch, tag or commit; the default is `main`. |
+| `--local-files-only` | Use local or cached files; fail if required files are missing. |
+| `--processor-dir PATH_OR_REPO` | Override the tokenizer/processor bundled with the model. |
+
+HPSv3++ requires the model's `config.json` to contain its Qwen3-VL
+`text_config` and `vision_config`. Legacy community exports containing only
+a training config are rejected. Use the published NF4 model or build a complete
+checkpoint with `hpsv3pp/scripts/merge_bf16.py`; architecture settings are not
+bundled in this code repository.
 
 ## Python API
 
-```python
-# inside the hpsv3 project (uv run --project hpsv3 python ...)
-import sys; sys.path.insert(0, "hpsv3")
-from src.evaluation.hpsv3_quantized import HPSv3QuantizedInferencer
+Run each example in its corresponding project environment, from the repository root.
 
-inf = HPSv3QuantizedInferencer.from_merged_dir("/path/to/hpsv3-merged-bf16")
-scores = inf.score(["img.png"], ["a photo of ..."])
+HPSv3 (`uv run --project hpsv3 python`):
+
+```python
+import sys
+sys.path.insert(0, "hpsv3/src")
+from evaluation.hpsv3_quantized import HPSv3QuantizedInferencer
+
+scorer = HPSv3QuantizedInferencer.from_merged_dir()
+scores = scorer.score(["images/cat.png"], ["a cat sitting by a window"])
 ```
 
-`HPSv3PPQuantizedInferencer` in `hpsv3pp/src/evaluation/hpsv3pp_quantized.py`
-has the same interface (plus an `iter_step` argument on `score()`).
+HPSv3++ (`uv run --project hpsv3pp python`):
 
-## Performance (RTX 3060 12GB)
+```python
+import sys
+sys.path.insert(0, "hpsv3pp/src")
+from evaluation.hpsv3pp_quantized import HPSv3PPQuantizedInferencer
 
-| model   | load time | peak VRAM (load) | peak VRAM (inference) |
-|---------|-----------|------------------|-----------------------|
-| HPSv3   | ~58s      | 6.10GB           | 8.66GB                |
-| HPSv3++ | ~60s      | 6.64GB           | 7.11GB                |
+scorer = HPSv3PPQuantizedInferencer.from_merged_dir()
+scores = scorer.score(["images/cat.png"], ["a cat sitting by a window"], iter_step=0.0)
+```
 
-Measurement notes: VRAM figures are `torch.cuda.max_memory_allocated()`
-(PyTorch tensor allocations only — the CUDA context/driver overhead and
-allocator-reserved-but-unused memory are not included, so `nvidia-smi` will
-report more). Measured at batch size 4 with CUDA 12.4 / PyTorch 2.6
-wheels; exact numbers vary with batch size, image resolution, and
-CUDA/PyTorch versions.
+`from_merged_dir()` accepts an optional local path or Hub repository ID,
+plus `revision=` and `local_files_only=`. Use these custom reward-model
+classes for scoring; generic `AutoModel` loading does not provide this interface.
 
-## Licensing notes (IMPORTANT)
+## Quantization
 
-- Code in this repository: MIT (see `LICENSE`).
-- `hpsv3/src/evaluation/hpsv3_model.py` contains a model class adapted from
-  [MizzenAI/HPSv3](https://github.com/MizzenAI/HPSv3) (MIT); attribution is
-  preserved in the file header, and the upstream copyright notice and full
-  MIT license text are reproduced in `THIRD_PARTY_NOTICES.md`.
-- **The HPSv3++ code repository has no LICENSE file** on GitHub. For that
-  reason its code is referenced only as a pinned git submodule and is NOT
-  redistributed here; whether and how you use that code is your own decision
-  — review the upstream repository. (The HPSv3++ *weights* on Hugging Face —
-  both Junjun2333/HPSv3-PlusPlus and the pre-merged
-  bdsqlsz/HPSV3-PlusPLus-BF16 — are published under Apache-2.0.)
-- Model weights are NOT redistributed; they are downloaded from the original
-  Hugging Face repositories under their own licenses.
+The published models use bitsandbytes NF4 with double quantization. Reward
+heads and conditioning modules are excluded from 4-bit quantization;
+excluded modules retain floating-point weights, which does not imply FP32.
+
+In our comparison, GPTQ had comparable quality to bnb 4-bit but used more VRAM.
+
+## Licensing notes
+
+- Repository code: MIT; see [LICENSE](LICENSE).
+- The HPSv3 model class adapts MizzenAI/HPSv3 code. Its MIT attribution and
+  license are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- HPSv3++ upstream code is referenced as a pinned submodule and has no
+  LICENSE file in that checkout. Its weight license does not grant a license
+  to the Python implementation.
+- The published NF4 weights carry Apache-2.0 separately from this repository's
+  code license. Each model repository includes LICENSE, NOTICE, source
+  attribution and conversion settings. Model weights are not stored here.
 
 ## Acknowledgements
 
-- [HPSv3: Towards Wide-Spectrum Human Preference Score](https://github.com/MizzenAI/HPSv3) (MizzenAI)
-- [HPSv3++](https://github.com/PlantPotatoOnMoon/HPSv3-PlusPlus) (arXiv:2606.14657)
-- [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct) / [Qwen3-VL](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) (Alibaba Qwen team)
+- [HPSv3](https://github.com/MizzenAI/HPSv3) — MizzenAI
+- [HPSv3++](https://github.com/PlantPotatoOnMoon/HPSv3-PlusPlus)
+- [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct) and
+  [Qwen3-VL](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) — Alibaba Qwen team
 - [bitsandbytes](https://github.com/bitsandbytes-foundation/bitsandbytes)

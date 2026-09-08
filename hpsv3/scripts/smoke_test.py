@@ -1,11 +1,8 @@
-"""Load HPSv3 in 4-bit and score one or more (image, prompt) pairs, printing
-scores plus load/inference time and peak VRAM.
+"""Score HPSv3 image/prompt pairs and print scores, timing and peak VRAM.
 
+The published NF4 model downloads automatically on first use.
 Usage (from the repository root):
-    CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/smoke_test.py \
-        --merged-dir /path/to/hpsv3-merged-bf16 \
-        --image img1.png --prompt "a cat" \
-        --image img2.png --prompt "a dog"
+    uv run --project hpsv3 hpsv3/scripts/smoke_test.py --image img.png --prompt "a cat"
 """
 
 import argparse
@@ -21,11 +18,13 @@ from src.evaluation.hpsv3_quantized import HPSv3QuantizedInferencer
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--merged-dir", required=True, help="Path to the merged bf16 HPSv3 checkpoint")
+    parser.add_argument("--model", "--merged-dir", dest="merged_dir", help="Local checkpoint or Hub repo ID; defaults to the published bnb NF4 model")
+    parser.add_argument("--revision", help="Hub branch, tag or commit (default: main)")
+    parser.add_argument("--local-files-only", action="store_true", help="Use only cached/local model files")
     parser.add_argument(
         "--processor-dir",
         default=None,
-        help="Where to load the tokenizer/processor from (default: --merged-dir if it "
+        help="Where to load the tokenizer/processor from (default: selected model if it "
         "contains processor files, otherwise the Qwen/Qwen2-VL-7B-Instruct base model)",
     )
     parser.add_argument("--image", action="append", required=True, help="Image path (repeatable)")
@@ -40,19 +39,15 @@ if __name__ == "__main__":
         parser.error(f"--image and --prompt counts must match ({len(args.image)} vs {len(args.prompt)})")
 
     assert torch.cuda.is_available(), "CUDA not visible -- check CUDA_VISIBLE_DEVICES"
-    # Force lazy CUDA context init before touching memory-stats APIs.
-    # torch.cuda.reset_peak_memory_stats(0) has been observed to raise
-    # "RuntimeError: Invalid device argument" intermittently when called
-    # before any tensor has actually been placed on the device (seen under
-    # CUDA_VISIBLE_DEVICES remapping); a trivial cuda allocation + sync
-    # first makes it reliable.
+    # Initialize CUDA before querying memory statistics.
     torch.zeros(1, device="cuda:0")
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats(0)
 
     t0 = time.time()
     inferencer = HPSv3QuantizedInferencer.from_merged_dir(
-        args.merged_dir, device="cuda:0", processor_dir=args.processor_dir
+        args.merged_dir, device="cuda:0", processor_dir=args.processor_dir,
+            revision=args.revision, local_files_only=args.local_files_only
     )
     load_time = time.time() - t0
     load_peak_gb = torch.cuda.max_memory_allocated(0) / 1e9

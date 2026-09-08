@@ -25,3 +25,9 @@ __pycache__/
 *.onnx
 *.gguf
 MERGE_COMPLETE
+
+# Local model downloads and quantization experiments
+/hpsv3/models/
+/hpsv3pp/model/
+/artifacts/
+/scores.json

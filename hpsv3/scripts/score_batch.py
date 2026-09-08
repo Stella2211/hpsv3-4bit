@@ -1,30 +1,12 @@
-"""Batch HPSv3 scoring CLI.
+"""Score image/prompt pairs with HPSv3 and write scores plus timing/VRAM JSON.
 
-``--input`` accepts either:
-
-- a JSON file: a list of ``{"id": ..., "image": <path>, "prompt": <text>}``
-  records, or
-- a directory: every image in it (png/jpg/jpeg/webp, case-insensitive) is
-  scored, with the prompt read from a same-named text file next to it
-  (``image.png`` -> ``image.txt``; extension configurable via
-  ``--prompt-ext``). Records get ``id`` = image file name.
-
-With ``--no-prompt``, prompt files / JSON prompts are not required: a short
-caption is generated for each image by the loaded Qwen VL backbone itself
-and used as the scoring prompt (saved to the output as
-``generated_prompt``).
-
-The script loads the 4-bit HPSv3 model once, scores every record in batched
-passes through the merged checkpoint, and writes ``{"id": ..., "score":
-<float>}`` results plus timing/VRAM metadata as JSON.
+The published NF4 model downloads automatically on first use.
+--input accepts a JSON list of {id, image, prompt} records or a directory
+of images with matching prompt files (image.png -> image.txt).
+--no-prompt generates captions and saves them as generated_prompt.
 
 Usage (from the repository root):
-    CUDA_VISIBLE_DEVICES=0 uv run --project hpsv3 hpsv3/scripts/score_batch.py \
-        --merged-dir /path/to/hpsv3-merged-bf16 \
-        --input records.json --output scores.json
-
-Use CUDA_VISIBLE_DEVICES to pick the GPU. HPSv3 in 4-bit needs ~8.7GB peak
-VRAM, so the chosen GPU should be otherwise idle on a 12GB card.
+    uv run --project hpsv3 hpsv3/scripts/score_batch.py --input records.json --output scores.json
 """
 
 from __future__ import annotations
@@ -99,11 +81,13 @@ def main() -> None:
         "with same-named prompt text files",
     )
     parser.add_argument("--output", required=True, help="Path to write JSON results")
-    parser.add_argument("--merged-dir", required=True, help="Path to the merged bf16 HPSv3 checkpoint")
+    parser.add_argument("--model", "--merged-dir", dest="merged_dir", help="Local checkpoint or Hub repo ID; defaults to the published bnb NF4 model")
+    parser.add_argument("--revision", help="Hub branch, tag or commit (default: main)")
+    parser.add_argument("--local-files-only", action="store_true", help="Use only cached/local model files")
     parser.add_argument(
         "--processor-dir",
         default=None,
-        help="Where to load the tokenizer/processor from (default: --merged-dir if it "
+        help="Where to load the tokenizer/processor from (default: selected model if it "
         "contains processor files, otherwise the Qwen/Qwen2-VL-7B-Instruct base model)",
     )
     parser.add_argument(
@@ -140,7 +124,8 @@ def main() -> None:
 
     t0 = time.time()
     inferencer = HPSv3QuantizedInferencer.from_merged_dir(
-        args.merged_dir, device="cuda:0", processor_dir=args.processor_dir
+        args.merged_dir, device="cuda:0", processor_dir=args.processor_dir,
+        revision=args.revision, local_files_only=args.local_files_only
     )
     load_time = time.time() - t0
     load_peak_gb = torch.cuda.max_memory_allocated(0) / 1e9

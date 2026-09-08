@@ -1,15 +1,10 @@
-"""One-time step: build HPSv3 in bf16 and save a merged full-precision
-checkpoint to local disk, so it can later be re-loaded with a bitsandbytes
-quantization_config (see src/evaluation/hpsv3_quantized.py for why this two
-stage approach is necessary).
+"""Build a merged HPSv3 BF16 checkpoint on CPU for model conversion.
 
-Runs on CPU only; no GPU is touched. Downloads Qwen2-VL-7B-Instruct and
-HPSv3.safetensors from the Hugging Face Hub on first run (set HF_HOME to
-control the cache location).
+Downloads the base model and original reward checkpoint. Requires substantial
+host RAM and disk space; unnecessary for scoring with the published NF4 model.
 
 Usage (from the repository root):
-    uv run --project hpsv3 hpsv3/scripts/merge_bf16.py \
-        --output-dir /path/to/hpsv3-merged-bf16
+    uv run --project hpsv3 hpsv3/scripts/merge_bf16.py --output-dir /path/to/merged-bf16
 """
 
 import argparse

@@ -1,19 +1,10 @@
-"""One-time CPU-only merge: bf16 Qwen3-VL-8B skeleton + hpsv3++.pth checkpoint
--> saved full-precision model dir, ready for 4-bit reload. See
-src/evaluation/hpsv3pp_quantized.py for why this two-stage approach is
-needed (bitsandbytes shape mismatch if quantized before the checkpoint is
-applied).
+"""Build a merged HPSv3++ BF16 checkpoint on CPU for model conversion.
 
-Deliberately does NOT touch CUDA_VISIBLE_DEVICES / the GPU at all -- this
-step runs entirely on CPU. Needs ~40GB of host RAM.
-
-Note: if you use the community pre-merged bf16 export
-(bdsqlsz/HPSV3-PlusPLus-BF16 on the Hugging Face Hub), you can skip this
-script entirely and point score_batch.py's --merged-dir at that download.
+Downloads the base model and original reward checkpoint. Requires substantial
+host RAM and disk space; unnecessary for scoring with the published NF4 model.
 
 Usage (from the repository root):
-    uv run --project hpsv3pp hpsv3pp/scripts/merge_bf16.py \
-        --output-dir /path/to/hpsv3pp-merged-bf16
+    uv run --project hpsv3pp hpsv3pp/scripts/merge_bf16.py --output-dir /path/to/merged-bf16
 """
 import argparse
 import sys

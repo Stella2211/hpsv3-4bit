@@ -1,30 +1,14 @@
-"""HPSv3 reward model, loadable in 4-bit on a 12GB GPU.
+"""HPSv3 reward scoring with bitsandbytes NF4.
 
-Background
-----------
-HPSv3 (MizzenAI/HPSv3, backbone Qwen2-VL-7B) exposes a `HPSv3RewardInferencer`
-that *can* accept a bitsandbytes `quantization_config` when building the base
-model, but then unconditionally overwrites the freshly-built model with the
-fine-tuned checkpoint (`HPSv3.safetensors`, ~16.6GB) via plain PyTorch
-`model.load_state_dict(state_dict, strict=True)`. bitsandbytes replaces
-`nn.Linear` weights with packed low-bit tensors of a different shape/dtype,
-so applying a full-precision state dict on top of an already-quantized model
-fails with shape mismatches.
+HPSv3QuantizedInferencer.from_merged_dir() downloads the published
+NF4 model by default. Local checkpoints and Hub repository IDs are also
+accepted; serialized NF4 settings are reused when present.
 
-This module works around it with the standard two-stage approach:
-
-  1. `merge_and_save_bf16()` — build the model in bf16 on CPU, apply the
-     fine-tuned checkpoint with `strict=True` (exactly like upstream), then
-     `save_pretrained()` the merged full-precision model to local disk once.
-  2. `load_quantized_inferencer()` — re-load that merged checkpoint through
-     `from_pretrained(..., quantization_config=BitsAndBytesConfig(...))`,
-     which quantizes weights *as they are loaded from disk* rather than
-     after the fact, so there is no shape-mismatch step at all.
-
-The reward head (`rm_head`, ~3.7M params) is excluded from quantization via
-`llm_int8_skip_modules` — it's tiny (negligible VRAM) and HPSv3's own code
-keeps it in fp32 for the final score computation, so quantizing it would
-only hurt precision for no memory benefit.
+Conversion helpers build a BF16 model on CPU and apply the reward checkpoint
+before quantization, since packed 4-bit weights cannot accept a full-precision
+state dict. This conversion is unnecessary for the published NF4 models.
+Reward and conditioning modules are excluded from 4-bit quantization;
+exclusion alone does not preserve FP32 dtype.
 """
 
 from __future__ import annotations
@@ -40,8 +24,10 @@ import torch
 from PIL import Image
 from transformers import AutoProcessor, BitsAndBytesConfig, Qwen2VLForConditionalGeneration
 from qwen_vl_utils import process_vision_info
+from ._hub import resolve_model, load_reward_settings, saved_quantization_config
 
 from .hpsv3_model import Qwen2VLRewardModelBT
+from ._merged_config import load_merged_config
 
 # ---------------------------------------------------------------------------
 # Constants copied verbatim from HPSv3's hpsv3/dataset/data_collator_qwen.py
@@ -93,7 +79,7 @@ CAPTION_INSTRUCTION = "Describe this image as a concise text-to-image prompt in 
 
 
 # ---------------------------------------------------------------------------
-# Stage 1: one-time bf16 merge (run on CPU, no GPU memory needed)
+# Optional BF16 conversion on CPU
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +178,7 @@ def merge_and_save_bf16(output_dir: str, checkpoint_path: str | None = None, for
 
 
 # ---------------------------------------------------------------------------
-# Stage 2: 4-bit quantized reload for inference
+# NF4 loading and inference
 # ---------------------------------------------------------------------------
 
 
@@ -206,7 +192,7 @@ def default_bnb_config(compute_dtype=torch.bfloat16) -> BitsAndBytesConfig:
     )
 
 
-def _load_processor(merged_dir: str, processor_dir: str | None, base_model_name: str):
+def _load_processor(merged_dir: str, processor_dir: str | None, base_model_name: str, local_files_only=False):
     """Load the AutoProcessor, preferring: explicit `processor_dir` >
     `merged_dir` (if it actually contains processor files) > the base model
     id. Merged dirs produced by `merge_and_save_bf16()` include the
@@ -220,7 +206,13 @@ def _load_processor(merged_dir: str, processor_dir: str | None, base_model_name:
         source = merged_dir
     else:
         source = base_model_name
-    processor = AutoProcessor.from_pretrained(source, padding_side="right")
+    processor = AutoProcessor.from_pretrained(source, padding_side="right", local_files_only=local_files_only)
+    # Transformers 4.46 predates processor chat_template.jinja loading.
+    template = Path(source) / "chat_template.jinja"
+    if not processor.chat_template and template.is_file():
+        processor.chat_template = template.read_text(encoding="utf-8")
+    if not processor.chat_template:
+        processor.chat_template = processor.tokenizer.chat_template
     if SPECIAL_REWARD_TOKEN not in processor.tokenizer.get_vocab():
         processor.tokenizer.add_special_tokens(
             {"additional_special_tokens": [SPECIAL_REWARD_TOKEN]}
@@ -239,10 +231,11 @@ def _device_map_from_device(device: str):
 
 
 def _warn_if_not_fp32(model, module_names: Sequence[str]) -> None:
-    """Lightweight post-load sanity check: these modules are in
-    `llm_int8_skip_modules` and were saved in fp32, so they should still be
-    fp32 after the quantized reload. Warn (not assert) so that custom
-    quantization configs remain usable."""
+    """Warn when auxiliary modules differ from the upstream FP32 setup.
+
+    Excluding modules from quantization does not prevent dtype conversion.
+    This diagnostic permits checkpoints with BF16 auxiliary modules.
+    """
     for name in module_names:
         module = getattr(model, name, None)
         if module is None:
@@ -264,27 +257,42 @@ class HPSv3QuantizedInferencer:
     @classmethod
     def from_merged_dir(
         cls,
-        merged_dir: str,
+        merged_dir: str | None = None,
         device: str = "cuda",
         quantization_config: BitsAndBytesConfig | None = None,
         dtype=torch.bfloat16,
         processor_dir: str | None = None,
+        revision: str | None = None,
+        local_files_only: bool = False,
     ) -> "HPSv3QuantizedInferencer":
-        processor = _load_processor(merged_dir, processor_dir, BASE_MODEL_NAME)
+        merged_dir = resolve_model(merged_dir, revision=revision, local_files_only=local_files_only)
+        processor = _load_processor(merged_dir, processor_dir, BASE_MODEL_NAME, local_files_only)
         special_token_ids = processor.tokenizer.convert_tokens_to_ids([SPECIAL_REWARD_TOKEN])
 
-        quantization_config = quantization_config or default_bnb_config(compute_dtype=dtype)
+        saved_quant = saved_quantization_config(merged_dir)
+        if saved_quant is not None:
+            if quantization_config is not None:
+                raise ValueError('A prequantized model uses its saved quantization settings')
+            if saved_quant.get("quant_method") != "bitsandbytes":
+                raise ValueError("This loader requires bitsandbytes quantization")
+            # Transformers reads the serialized settings directly from config.
+            quantization_config = None
+        else:
+            quantization_config = quantization_config or default_bnb_config(compute_dtype=dtype)
+        reward_settings = load_reward_settings(merged_dir, dict(
+            output_dim=OUTPUT_DIM, reward_token=REWARD_TOKEN_MODE,
+            special_token_ids=special_token_ids, rm_head_type=RM_HEAD_TYPE,
+            rm_head_kwargs=RM_HEAD_KWARGS,
+        ), processor.tokenizer)
 
+        config = load_merged_config(merged_dir, processor.tokenizer)
+        config.use_cache = False
         model = Qwen2VLRewardModelBT.from_pretrained(
             merged_dir,
-            output_dim=OUTPUT_DIM,
-            reward_token=REWARD_TOKEN_MODE,
-            special_token_ids=special_token_ids,
-            rm_head_type=RM_HEAD_TYPE,
-            rm_head_kwargs=RM_HEAD_KWARGS,
+            config=config,
+            **reward_settings,
             torch_dtype=dtype,
             attn_implementation="sdpa",
-            use_cache=False,
             quantization_config=quantization_config,
             device_map=_device_map_from_device(device),
         )

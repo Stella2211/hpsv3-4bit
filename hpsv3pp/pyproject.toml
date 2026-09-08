@@ -12,6 +12,7 @@ dependencies = [
     "accelerate>=1.14.0",
     "bitsandbytes>=0.50.0",
     "huggingface-hub<1.0,>=0.34",
+    "hf-xet>=1.6.0",
     "safetensors>=0.8.0",
     "datasets>=3.0.0",
     "omegaconf>=2.3.0",
