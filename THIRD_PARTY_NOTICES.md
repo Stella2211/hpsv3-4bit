@@ -34,6 +34,25 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Hugging Face TRL (Apache-2.0)
+
+`hpsv3pp/src/evaluation/_trl_compat.py` adapts TRL's
+`get_kbit_device_map` helper. The reviewed upstream reference is
+[`trl/trainer/utils.py` at v0.12.0](https://github.com/huggingface/trl/blob/14ef1aba152fddbc5a58f3a8a712b6e509e7e69d/trl/trainer/utils.py),
+commit `14ef1aba152fddbc5a58f3a8a712b6e509e7e69d`.
+
+Copyright 2022 The HuggingFace Team. All rights reserved.
+Modifications Copyright (c) 2026 stella.
+
+The adaptation keeps CUDA support, removes the XPU branch, imports
+`PartialState` lazily, uses `process_index` instead of `local_process_index`,
+renames the helper and installs it only if TRL does not provide it.
+It is intended for single-GPU inference.
+
+This file is licensed under Apache-2.0, separately from the repository's MIT
+license. The full upstream license is included in
+[licenses/TRL-Apache-2.0.txt](licenses/TRL-Apache-2.0.txt).
+
 ## PlantPotatoOnMoon/HPSv3-PlusPlus (no license file)
 
 The upstream HPSv3++ code repository publishes no LICENSE file. Its code is

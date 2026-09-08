@@ -158,7 +158,8 @@ In our comparison, GPTQ had comparable quality to bnb 4-bit but used more VRAM.
 
 ## Licensing notes
 
-- Repository code: MIT; see [LICENSE](LICENSE).
+- Repository code: MIT, except the TRL compatibility shim (Apache-2.0);
+  see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - The HPSv3 model class adapts MizzenAI/HPSv3 code. Its MIT attribution and
   license are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - HPSv3++ upstream code is referenced as a pinned submodule and has no
