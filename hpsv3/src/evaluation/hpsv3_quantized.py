@@ -248,6 +248,22 @@ def _warn_if_not_fp32(model, module_names: Sequence[str]) -> None:
             )
 
 
+def _patch_quantized_visual_dtype(model: Qwen2VLRewardModelBT) -> None:
+    """Make Qwen2-VL use the floating dtype of its NF4 vision input layer.
+
+    Transformers 4.46.3 derives ``get_dtype()`` from the first vision MLP
+    weight.  With NF4 loading that weight is a packed uint8 tensor, which
+    causes normalized image pixels to be truncated when either the reward
+    model or the base generation forward casts ``pixel_values``.  Keep the
+    workaround on this model instance so no packed parameter is modified.
+    """
+    visual = model.visual
+    visual.get_dtype = MethodType(
+        lambda module: module.patch_embed.proj.weight.dtype,
+        visual,
+    )
+
+
 @dataclass
 class HPSv3QuantizedInferencer:
     model: Qwen2VLRewardModelBT
@@ -296,6 +312,7 @@ class HPSv3QuantizedInferencer:
             quantization_config=quantization_config,
             device_map=_device_map_from_device(device),
         )
+        _patch_quantized_visual_dtype(model)
         model.eval()
         _warn_if_not_fp32(model, ["rm_head"])
         return cls(model=model, processor=processor, device=device)

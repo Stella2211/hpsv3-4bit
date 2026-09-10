@@ -120,6 +120,13 @@ bundled in this code repository.
 
 ## Python API
 
+HPSv3's loader preserves floating-point vision inputs when the vision tower
+uses NF4 weights. Transformers 4.46.3 otherwise derives the image dtype from
+packed `uint8` weights, corrupting normalized pixels before both scoring and
+captioning. Existing NF4 model files remain usable; update the wrapper code
+to obtain this correction. Re-evaluate HPSv3 scores produced with older
+wrapper code.
+
 Run each example in its corresponding project environment, from the repository root.
 
 HPSv3 (`uv run --project hpsv3 python`):
