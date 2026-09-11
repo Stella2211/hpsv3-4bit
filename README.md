@@ -43,7 +43,7 @@ Both scorers now use the canonical `hpsv3_4bit` package on Transformers
 dependencies. Existing model downloads remain usable.
 
 The first `hpsv3pp-score` invocation fetches the reviewed HPSv3++ compatibility
-files from the author GitHub repository over HTTPS, verifies their SHA-256
+files from the author GitHub repository's Contents API over HTTPS, verifies their SHA-256
 hashes, and stores them under `~/.cache/hpsv3-4bit/upstream/<commit>` by
 default. Use `--source-dir PATH` to override the cache base; the fixed commit
 name is appended beneath that base. The scorer never runs Git, pip, or a child

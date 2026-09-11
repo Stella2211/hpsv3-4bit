@@ -6,6 +6,7 @@ import py_compile
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from hpsv3_4bit.hpsv3pp import upstream
@@ -78,6 +79,44 @@ class UpstreamSourceTests(unittest.TestCase):
                     upstream.ensure_source(source_directory=self.base)
             self.assertFalse((self.base / upstream.COMMIT).exists())
             self.assertEqual(list(self.base.glob(".*staging-*")), [])
+
+    def test_download_uses_github_contents_api_without_authorization(self):
+        requests = []
+        responses = [_Response(self.files[name]) for name in self.files]
+        def fetch(request, timeout):
+            requests.append((request, timeout))
+            return responses.pop(0)
+        with self._patch_source(), patch.object(upstream, "urlopen", side_effect=fetch):
+            upstream.ensure_source(source_directory=self.base)
+        self.assertEqual(len(requests), len(self.files))
+        for (request, timeout), relative in zip(requests, self.files):
+            self.assertEqual(timeout, 1)
+            self.assertEqual(
+                request.full_url,
+                f"https://api.github.com/repos/PlantPotatoOnMoon/HPSv3-PlusPlus/contents/{relative}?ref={upstream.COMMIT}",
+            )
+            self.assertEqual(request.get_header("Accept"), "application/vnd.github.raw+json")
+            self.assertEqual(request.get_header("User-agent"), "hpsv3-4bit-source-provisioner")
+            self.assertIsNone(request.get_header("Authorization"))
+
+    def test_rate_limit_failure_reports_headers_and_cleans_staging(self):
+        error = HTTPError(
+            "https://api.github.com", 429, "rate limited",
+            {"Retry-After": "30", "X-RateLimit-Reset": "1700000000"}, None,
+        )
+        with self._patch_source(), patch.object(upstream, "urlopen", side_effect=error):
+            with self.assertRaisesRegex(upstream.SourceProvisionError, "rate limit.*Retry-After=30.*X-RateLimit-Reset=1700000000"):
+                upstream.ensure_source(source_directory=self.base)
+        self.assertFalse((self.base / upstream.COMMIT).exists())
+        self.assertEqual(list(self.base.glob(".*staging-*")), [])
+
+    def test_generic_forbidden_failure_is_not_called_rate_limit(self):
+        error = HTTPError("https://api.github.com", 403, "forbidden", {}, None)
+        with self._patch_source(), patch.object(upstream, "urlopen", side_effect=error):
+            with self.assertRaisesRegex(upstream.SourceProvisionError, "access denied") as raised:
+                upstream.ensure_source(source_directory=self.base)
+        self.assertNotIn("rate limit", str(raised.exception))
+        self.assertEqual(list(self.base.glob(".*staging-*")), [])
 
     def test_corrupt_cache_is_repaired_atomically(self):
         with self._patch_source():
