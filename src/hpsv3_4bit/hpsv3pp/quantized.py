@@ -11,8 +11,8 @@ from qwen_vl_utils import process_vision_info
 from safetensors import safe_open
 from .hub import load_reward_settings
 from .merged_config import load_merged_config
-from .model import Qwen3VLRewardModelFiLMHybrid
-from .prompts import INSTRUCTION, prompt_with_special_token
+from .model import get_reward_model_class, install_vision_interpolation_hook
+from .prompts import load_prompts
 
 SPECIAL_REWARD_TOKEN = "<|Reward|>"
 OUTPUT_DIM = 2
@@ -77,7 +77,7 @@ def _restore_capability_dtype(model, directory):
 
 @dataclass
 class HPSv3PPQuantizedInferencer:
-    model: Qwen3VLRewardModelFiLMHybrid
+    model: object
     processor: object
     device: str = "cuda"
 
@@ -100,7 +100,8 @@ class HPSv3PPQuantizedInferencer:
         # needs the tokenizer's padding ID on the outer config for batches.
         config.pad_token_id = processor.tokenizer.pad_token_id
         config.use_cache = False
-        model, info = Qwen3VLRewardModelFiLMHybrid.from_pretrained(
+        reward_model_class = get_reward_model_class()
+        model, info = reward_model_class.from_pretrained(
             str(directory), config=config, **settings,
             torch_dtype=torch.bfloat16, attn_implementation="sdpa", quantization_config=None,
             device_map={"": str(device)}, use_safetensors=True, output_loading_info=True,
@@ -108,6 +109,7 @@ class HPSv3PPQuantizedInferencer:
         check_cancel()
         if info.get("missing_keys") or info.get("mismatched_keys") or info.get("error_msgs") or info.get("unexpected_keys"):
             raise ValueError(f"Backbone checkpoint mismatch: {info}")
+        install_vision_interpolation_hook(model)
         _restore_capability_dtype(model, directory)
         for name in ("rm_head", "cond_encoder", "film_gen", "scale_gen", "shift_gen", "cond_head", "attn_proj", "margin_head", "sim_proj", "var_proj", "cross_attn", "key_proj", "pair_margin_head", "group_encoder"):
             module = getattr(model, name, None)
@@ -119,8 +121,9 @@ class HPSv3PPQuantizedInferencer:
     def prepare_batch(self, image_paths: Sequence, prompts: Sequence[str]):
         if not image_paths or len(image_paths) != len(prompts):
             raise ValueError("Provide a nonempty batch with one prompt per image.")
+        prompts_text = load_prompts()
         batch = _batch(self.processor, list(image_paths),
-                       [INSTRUCTION.format(text_prompt=prompt) + prompt_with_special_token for prompt in prompts], self.device)
+                       [prompts_text["INSTRUCTION"].format(text_prompt=prompt) + prompts_text["prompt_with_special_token"] for prompt in prompts], self.device)
         token_id = self.processor.tokenizer.convert_tokens_to_ids(SPECIAL_REWARD_TOKEN)
         if not torch.all((batch["input_ids"] == token_id).sum(dim=1) == 1).item():
             raise ValueError("Each scoring request must contain exactly one reward token.")

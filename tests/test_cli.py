@@ -11,6 +11,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 from hpsv3_4bit import cli
 from hpsv3_4bit.model_source import resolve_model_source
+from hpsv3_4bit.hpsv3pp import upstream
 
 
 class _Cuda:
@@ -54,8 +55,9 @@ class CliTests(unittest.TestCase):
             output = root / "out.json"
             session = _Session()
             fake_torch = types.SimpleNamespace(cuda=_Cuda(), zeros=lambda *a, **k: None)
-            with patch.dict(sys.modules, {"torch": fake_torch}), patch.object(cli, "load_model", return_value=session), patch.object(cli, "resolve_model_source", return_value=(root, root)):
+            with patch.dict(sys.modules, {"torch": fake_torch}), patch.object(upstream, "ensure_source") as ensure, patch.object(cli, "load_model", return_value=session), patch.object(cli, "resolve_model_source", return_value=(root, root)):
                 cli.main_hpsv3pp(["--input", str(records), "--output", str(output), "--model", "repo", "--revision", "r1", "--local-files-only", "--processor-dir", str(root), "--batch-size", "2", "--iter-step", "0.25"])
+            ensure.assert_called_once_with(local_files_only=True)
             result = json.loads(output.read_text())
             self.assertEqual([row["id"] for row in result["scores"]], ["0", "1", "2"])
             self.assertEqual(session.calls[0][1:], (2, ["p0", "p1"], {"iter_step": 0.25}))

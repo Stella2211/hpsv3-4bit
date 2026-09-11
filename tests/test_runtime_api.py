@@ -5,6 +5,7 @@ import ast
 import json
 import hashlib
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
@@ -45,6 +46,16 @@ class FakeInferencer:
 
 
 class RuntimeApiTests(unittest.TestCase):
+    def setUp(self):
+        import hpsv3_4bit.hpsv3pp.quantized as pp_quantized
+        self._prompt_patch = patch.object(
+            pp_quantized,
+            "load_prompts",
+            return_value={"INSTRUCTION": "{text_prompt}", "prompt_with_special_token": "<|Reward|>"},
+        )
+        self._prompt_patch.start()
+        self.addCleanup(self._prompt_patch.stop)
+
     def test_session_is_single_pair_and_checks_cancellation(self):
         checks = []
         inferencer = FakeInferencer()
@@ -196,8 +207,10 @@ class RuntimeApiTests(unittest.TestCase):
             def load(*args, **kwargs):
                 captured.update(kwargs)
                 return Model(), {"missing_keys": [], "mismatched_keys": [], "unexpected_keys": [], "error_msgs": []}
+            fake_class = types.SimpleNamespace(from_pretrained=staticmethod(load))
             with patch.object(module.AutoProcessor, "from_pretrained", return_value=Processor()), \
-                 patch.object(module.Qwen3VLRewardModelFiLMHybrid, "from_pretrained", side_effect=load), \
+                 patch.object(module, "get_reward_model_class", return_value=fake_class), \
+                 patch.object(module, "install_vision_interpolation_hook"), \
                  patch.object(module, "_restore_capability_dtype"), \
                  patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()):
                 module.HPSv3PPQuantizedInferencer.from_merged_dir(directory, device="cpu")
@@ -233,13 +246,23 @@ class RuntimeApiTests(unittest.TestCase):
         import importlib
         for family, class_name in (("hpsv3", "HPSv3QuantizedInferencer"), ("hpsv3pp", "HPSv3PPQuantizedInferencer")):
             module = importlib.import_module(f"hpsv3_4bit.{family}.quantized")
-            model_class = module.Qwen2VLRewardModelBT if family == "hpsv3" else module.Qwen3VLRewardModelFiLMHybrid
+            if family == "hpsv3":
+                model_class = module.Qwen2VLRewardModelBT
+            else:
+                model_class = types.SimpleNamespace(from_pretrained=staticmethod(lambda *args, **kwargs: (object(), {})))
             for field in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs"):
                 with self.subTest(family=family, field=field), tempfile.TemporaryDirectory() as directory:
-                    with patch.object(module, "_load_processor", return_value=types.SimpleNamespace(tokenizer=types.SimpleNamespace(pad_token_id=0))), \
-                         patch.object(module, "_validate_checkpoint", return_value={}), \
-                         patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()), \
-                         patch.object(model_class, "from_pretrained", return_value=(object(), {field: ["bad weight"]})):
+                    patches = [
+                        patch.object(module, "_load_processor", return_value=types.SimpleNamespace(tokenizer=types.SimpleNamespace(pad_token_id=0))),
+                        patch.object(module, "_validate_checkpoint", return_value={}),
+                        patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()),
+                        patch.object(model_class, "from_pretrained", return_value=(object(), {field: ["bad weight"]})),
+                    ]
+                    if family == "hpsv3pp":
+                        patches.append(patch.object(module, "get_reward_model_class", return_value=model_class))
+                    with ExitStack() as stack:
+                        for item in patches:
+                            stack.enter_context(item)
                         with self.assertRaisesRegex(ValueError, "checkpoint mismatch"):
                             getattr(module, class_name).from_merged_dir(directory, device="cpu")
 
@@ -278,18 +301,18 @@ class RuntimeApiTests(unittest.TestCase):
 
     def test_hpsv3pp_prompt_constants_match_pinned_upstream(self):
         package = Path(__file__).parents[1]
-        source = package / "hpsv3pp" / "third_party" / "HPSv3-PlusPlus" / "hpsv3" / "dataset" / "data_collator_qwen.py"
-        if not source.is_file():
-            self.skipTest("nested upstream checkout is unavailable")
-        def constants(path):
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            found = {}
-            for node in tree.body:
-                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                    if node.targets[0].id in {"INSTRUCTION", "prompt_with_special_token"}:
-                        found[node.targets[0].id] = ast.literal_eval(node.value)
-            return found
-        self.assertEqual(constants(source), constants(package / "src/hpsv3_4bit/hpsv3pp/prompts.py"))
+        from hpsv3_4bit.hpsv3pp.prompts import load_prompts
+        from hpsv3_4bit.hpsv3pp.upstream import SourceProvisionError
+        try:
+            prompts = load_prompts()
+        except (FileNotFoundError, ImportError, SourceProvisionError) as exc:
+            self.skipTest(f"external upstream source unavailable: {exc}")
+        self.assertIn("INSTRUCTION", prompts)
+        self.assertIn("prompt_with_special_token", prompts)
+        self.assertEqual(hashlib.sha256(prompts["INSTRUCTION"].encode()).hexdigest(),
+                         "4b760179e6eeec994804cc37e30968d0132bedeea81989ca7b045f8a2051397d")
+        self.assertEqual(hashlib.sha256(prompts["prompt_with_special_token"].encode()).hexdigest(),
+                         "2471faca094ae5bd6fe17b71dce20c3d7583625545e235889f7e74e7eeb69d0a")
 
     def test_hpsv3_prompt_constants_match_legacy_protocol(self):
         package = Path(__file__).parents[1]
@@ -322,7 +345,11 @@ class RuntimeApiTests(unittest.TestCase):
     def test_hpsv3pp_reward_model_forward_uses_public_backbone(self):
         import torch
         from transformers import Qwen3VLConfig
-        from hpsv3_4bit.hpsv3pp.model import Qwen3VLRewardModelFiLMHybrid
+        from hpsv3_4bit.hpsv3pp.upstream import SourceProvisionError
+        try:
+            from hpsv3_4bit.hpsv3pp.model import Qwen3VLRewardModelFiLMHybrid
+        except (FileNotFoundError, ImportError, SourceProvisionError) as exc:
+            self.skipTest(f"external upstream source unavailable: {exc}")
         config = Qwen3VLConfig(
             text_config={"vocab_size": 32, "hidden_size": 8, "intermediate_size": 16,
                 "num_hidden_layers": 1, "num_attention_heads": 2, "num_key_value_heads": 2,
@@ -341,7 +368,11 @@ class RuntimeApiTests(unittest.TestCase):
     def test_bf16_backbone_loading_preserves_fp32_reward_weights(self):
         import torch
         from hpsv3_4bit.hpsv3.model import Qwen2VLRewardModelBT
-        from hpsv3_4bit.hpsv3pp.model import Qwen3VLRewardModelFiLMHybrid
+        from hpsv3_4bit.hpsv3pp.upstream import SourceProvisionError
+        try:
+            from hpsv3_4bit.hpsv3pp.model import Qwen3VLRewardModelFiLMHybrid
+        except (FileNotFoundError, ImportError, SourceProvisionError) as exc:
+            self.skipTest(f"external upstream source unavailable: {exc}")
         for family, cls in (("hpsv3", Qwen2VLRewardModelBT), ("hpsv3pp", Qwen3VLRewardModelFiLMHybrid)):
             with self.subTest(family=family), tempfile.TemporaryDirectory() as directory:
                 settings = dict(output_dim=2, reward_token="special", special_token_ids=[7], rm_head_type="ranknet")

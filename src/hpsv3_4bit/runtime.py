@@ -1,8 +1,9 @@
-"""Small stable API around the existing family-specific inferencers.
+"""Canonical local-only runtime for HPSv3 and HPSv3++ NF4 checkpoints.
 
 Callers own batching and lifecycle policy; this module owns model construction
-and single-pair or batch inference. No training package, subprocess, remote
-code, or runtime installation is used here.
+and single-pair or batch inference. Source preparation is explicit and happens
+outside this API. No Hub download, subprocess, remote code, or runtime
+installation is performed while loading or scoring.
 """
 
 from __future__ import annotations

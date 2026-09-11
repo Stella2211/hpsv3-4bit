@@ -70,6 +70,10 @@ def build_parser(family: str) -> argparse.ArgumentParser:
 
 
 def run(family: str, args: argparse.Namespace) -> dict:
+    if family == "hpsv3pp":
+        from .hpsv3pp.upstream import ensure_source
+
+        ensure_source(local_files_only=args.local_files_only)
     records = load_records(args.input, args.prompt_ext, args.no_prompt)
     if family == "hpsv3pp":
         empty = {"scores": [], "load_time_sec": 0.0, "load_peak_vram_gb": 0.0,

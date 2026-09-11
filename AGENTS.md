@@ -5,15 +5,16 @@
 - `hpsv3/`: HPSv3 conversion tools, pinned to Transformers 4.46.3.
 - `hpsv3pp/`: HPSv3++ conversion tools, pinned to Transformers 4.57.0.
 - `src/hpsv3_4bit/`: canonical inference-only runtime for host Transformers
-  5.17.x. It reuses the reward model classes but keeps both families under
-  distinct namespaces and loads only local merged NF4 checkpoints.
+  5.17.x. It keeps both families under distinct namespaces and loads only
+  prepared local merged NF4 checkpoints.
 - The root project installs both scoring CLIs and the canonical runtime.
   Each conversion project retains its own `pyproject.toml`, `uv.lock`,
   conversion helpers and tests. Old score script paths are thin entry points
   into the root package, not separate inference implementations.
-- `hpsv3pp/third_party/HPSv3-PlusPlus` is a pinned upstream Git submodule.
-  Keep compatibility changes in this repository's wrappers rather than editing
-  the submodule. Preserve upstream attribution and separate code/weight licenses.
+- HPSv3++ compatibility source is prepared from the pinned upstream revision
+  on the first `hpsv3pp-score` invocation or by the explicit `ensure_source`
+  API; the runtime uses a thin adapter and does not redistribute the upstream
+  checkout. Preserve upstream attribution and separate code/weight licenses.
 - Root `scripts/` contains NF4 release preparation and validation tools;
   root `tests/` covers the shared Hub-loading contract.
 
@@ -28,7 +29,7 @@ uv run hpsv3pp-score --help
 ```
 
 Use the root environment for inference. For BF16 merge/NF4 export only,
-initialize the nested submodule and use `uv sync --project hpsv3` or
+use `uv sync --project hpsv3` or
 `uv sync --project hpsv3pp`, then `uv run --project <family> ...`.
 Keep dependency changes and the corresponding lockfile in sync.
 The projects select CUDA 13.0 PyTorch wheels; GPU inference requires

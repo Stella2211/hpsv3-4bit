@@ -42,6 +42,15 @@ Both scorers now use the canonical `hpsv3_4bit` package on Transformers
 5.17.x. Scoring does not require the nested upstream submodule or training
 dependencies. Existing model downloads remain usable.
 
+The first `hpsv3pp-score` invocation fetches the reviewed HPSv3++ compatibility
+files from the author GitHub repository over HTTPS, verifies their SHA-256
+hashes, and stores them under `~/.cache/hpsv3-4bit/upstream/<commit>` by
+default. `HPSV3PP_SOURCE_DIR` may override the cache base; the fixed commit
+name is appended beneath that base. The scorer never runs Git, pip, or a child
+process at inference time. If preparation fails, restore network access and rerun
+the scorer. ComfyUI users can reinstall the extension through Manager instead.
+Scoring and captioning then work offline with the prepared source and local models.
+
 When updating an older checkout, run `uv sync` at the repository root and
 replace `uv run --project hpsv3 hpsv3/scripts/score_batch.py` with
 `uv run hpsv3-score` (and likewise `hpsv3pp-score`). CLI options and
@@ -166,6 +175,16 @@ directory, processor_directory = resolve_model_source(
 session = load_model("hpsv3pp", directory, processor_directory=processor_directory)
 ```
 
+Library users can explicitly prepare the reviewed source before loading:
+
+```python
+from hpsv3_4bit.hpsv3pp.upstream import ensure_source
+from hpsv3_4bit import load_model
+
+ensure_source()
+session = load_model("hpsv3pp", "/local/HPSv3-PlusPlus-bnb-NF4")
+```
+
 Model acquisition stays outside inference; `load_model` never downloads.
 Both the new API and CLIs require serialized NF4 checkpoints. If you used
 the old loader to quantize a BF16 directory on the fly, first run the
@@ -201,12 +220,13 @@ definitions do not implement CLI Score or Caption.
   see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - The HPSv3 model class adapts MizzenAI/HPSv3 code. Its MIT attribution and
   license are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- HPSv3++ upstream code is referenced as a pinned submodule and has no
-  LICENSE file in that checkout. Its weight license does not grant a license
-  to the Python implementation.
-- The published NF4 weights carry Apache-2.0 separately from this repository's
-  code license. Each model repository includes LICENSE, NOTICE, source
-  attribution and conversion settings. Model weights are not stored here.
+- HPSv3++ compatibility files come from the pinned external source revision
+  and have no identified code license. Its weight license does not grant a
+  license to the Python implementation; the permission marker remains a
+  release blocker.
+- The published NF4 weights have terms stated by their respective model
+  repositories. Review each repository's LICENSE, NOTICE, attribution and
+  usage terms before redistribution. Model weights are not stored here.
 
 ## Acknowledgements
 
