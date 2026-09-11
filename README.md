@@ -213,21 +213,6 @@ Run conversion scripts with their existing `uv run --project hpsv3 ...` or
 paths. They are not inference environments. Their conversion-only model
 definitions do not implement CLI Score or Caption.
 
-## Licensing notes
-
-- Own repository code: MIT. The TRL shim is Apache-2.0 and the reusable
-  runtime's HPSv3++ model classes have unresolved upstream permission;
-  see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- The HPSv3 model class adapts MizzenAI/HPSv3 code. Its MIT attribution and
-  license are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- HPSv3++ compatibility files come from the pinned external source revision
-  and have no identified code license. Its weight license does not grant a
-  license to the Python implementation; the permission marker remains a
-  release blocker.
-- The published NF4 weights have terms stated by their respective model
-  repositories. Review each repository's LICENSE, NOTICE, attribution and
-  usage terms before redistribution. Model weights are not stored here.
-
 ## Acknowledgements
 
 - [HPSv3](https://github.com/MizzenAI/HPSv3) — MizzenAI
@@ -265,6 +250,4 @@ caption = session.caption(image, max_new_tokens=96)
 Each `score` call evaluates one pair with iteration condition zero.
 `score_batch` also supports explicit HPSv3++ iteration conditioning.
 The host owns model lifetime and may pass `check_cancel` to `load_model`
-and Transformers stopping criteria to `caption`. HPSv3++ code permission must
-be resolved before publishing this runtime or its wheel. See the notices
-inside `src/hpsv3_4bit/`.
+and Transformers stopping criteria to `caption`.
