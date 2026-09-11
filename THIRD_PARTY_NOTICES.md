@@ -55,7 +55,9 @@ license. The full upstream license is included in
 
 ## PlantPotatoOnMoon/HPSv3-PlusPlus (no license file)
 
-The upstream HPSv3++ code repository publishes no LICENSE file. Its code is
-therefore NOT redistributed in this repository; it is referenced only as a
-pinned git submodule at `hpsv3pp/third_party/HPSv3-PlusPlus`, which you clone
-directly from upstream. See the "Licensing notes" section of `README.md`.
+The upstream HPSv3++ code repository publishes no LICENSE file. The legacy
+project references it as a pinned git submodule. The reusable runtime also
+contains adapted reward classes under `src/hpsv3_4bit/hpsv3pp/`; these carry
+`LicenseRef-HPSv3PlusPlus-Permission-Unconfirmed` and must not be publicly
+distributed until permission is documented. See the runtime's
+`THIRD_PARTY_NOTICES.md` and `PROVENANCE.md` for its source revision and scope.

@@ -165,7 +165,8 @@ In our comparison, GPTQ had comparable quality to bnb 4-bit but used more VRAM.
 
 ## Licensing notes
 
-- Repository code: MIT, except the TRL compatibility shim (Apache-2.0);
+- Own repository code: MIT. The TRL shim is Apache-2.0 and the reusable
+  runtime's HPSv3++ model classes have unresolved upstream permission;
   see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - The HPSv3 model class adapts MizzenAI/HPSv3 code. Its MIT attribution and
   license are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -183,3 +184,35 @@ In our comparison, GPTQ had comparable quality to bnb 4-bit but used more VRAM.
 - [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct) and
   [Qwen3-VL](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) — Alibaba Qwen team
 - [bitsandbytes](https://github.com/bitsandbytes-foundation/bitsandbytes)
+
+## Canonical host runtime
+
+`src/hpsv3_4bit` provides the inference-only runtime used by host integrations
+on Transformers 5.17.x. Import `hpsv3_4bit.load_model` with family `hpsv3` or
+`hpsv3pp` and a local merged NF4 directory. The older `hpsv3/` and `hpsv3pp/`
+projects remain separate CLI environments and are retained as regression
+baselines.
+
+The canonical runtime does not download models, execute commands, import
+training packages, or load remote code. It requires local serialized
+bitsandbytes NF4 checkpoints and preserves the upstream reward protocols.
+
+Build the standalone wheel with `uv build --wheel`. Host applications provide
+their own PyTorch installation and install the wheel's declared inference
+dependencies before calling the API:
+
+```python
+from PIL import Image
+from hpsv3_4bit import load_model
+
+session = load_model("hpsv3", "/local/HPSv3-bnb-NF4", device="cuda")
+image = Image.open("example.png").convert("RGB")
+score = session.score(image, "An image description.")
+caption = session.caption(image, max_new_tokens=96)
+```
+
+Each score call evaluates one pair; HPSv3++ fixes the iteration condition at
+zero. The host owns model lifetime and may pass `check_cancel` to `load_model`
+and Transformers stopping criteria to `caption`. HPSv3++ code permission must
+be resolved before publishing this runtime or its wheel. See the notices
+inside `src/hpsv3_4bit/`.

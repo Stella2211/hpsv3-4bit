@@ -4,8 +4,12 @@
 
 - `hpsv3/`: Qwen2-VL-based HPSv3 scorer, pinned to Transformers 4.46.3.
 - `hpsv3pp/`: Qwen3-VL-based HPSv3++ scorer, pinned to Transformers 4.57.0.
-- Each project has its own `pyproject.toml`, `uv.lock`, `src/evaluation/`,
-  scoring/conversion scripts, and tests. Do not combine their environments.
+- `src/hpsv3_4bit/`: canonical inference-only runtime for host Transformers
+  5.17.x. It reuses the reward model classes but keeps both families under
+  distinct namespaces and loads only local merged NF4 checkpoints.
+- Each legacy project has its own `pyproject.toml`, `uv.lock`, `src/evaluation/`,
+  scoring/conversion scripts, and tests. Keep those comparison environments
+  intact; the new runtime supports both families in one host environment.
 - `hpsv3pp/third_party/HPSv3-PlusPlus` is a pinned upstream Git submodule.
   Keep compatibility changes in this repository's wrappers rather than editing
   the submodule. Preserve upstream attribution and separate code/weight licenses.
@@ -35,6 +39,9 @@ a compatible NVIDIA GPU and driver. CPU tests do not require model downloads.
   solely to resolve formatting differences. No formatter/linter is configured.
 - Keep both scorers' shared CLI options and Hub-loading behavior consistent.
   Their implementations remain separate because their dependencies differ.
+- The legacy `hpsv3/` and `hpsv3pp/` CLI projects remain frozen comparison
+  baselines. New host compatibility fixes belong in `src/hpsv3_4bit/`; do not
+  claim that the legacy CLIs share the canonical runtime.
 - Default inference loads the published NF4 model automatically. Preserve local
   paths, Hub IDs, explicit revisions, cached/offline loading, and the
   `--merged-dir` compatibility alias for `--model`.
@@ -55,7 +62,8 @@ a compatible NVIDIA GPU and driver. CPU tests do not require model downloads.
 Run the relevant existing tests after implementation changes:
 
 ```bash
-uv run --project hpsv3 python -m unittest discover -s tests -v
+uv run --no-project --python <host-python> python -m unittest discover -s tests -p test_runtime_api.py -v
+uv run --project hpsv3 python -m unittest discover -s tests -p test_hub_loading.py -v
 uv run --project hpsv3 python -m unittest discover -s hpsv3/tests -v
 uv run --project hpsv3pp python -m unittest discover -s hpsv3pp/tests -v
 ```
