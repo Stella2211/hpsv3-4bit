@@ -38,6 +38,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(hps.batch_size, 4)
         self.assertEqual(pp.batch_size, 2)
         self.assertEqual(pp.merged_dir, "m")
+        self.assertIsNone(pp.source_dir)
+        self.assertFalse(hasattr(hps, "source_dir"))
         for args in (("--batch-size", "0"), ("--iter-step", "1.1")):
             with self.assertRaises(SystemExit):
                 cli.build_parser("hpsv3pp").parse_args(["--input", "x", "--output", "y", *args])
@@ -55,13 +57,32 @@ class CliTests(unittest.TestCase):
             output = root / "out.json"
             session = _Session()
             fake_torch = types.SimpleNamespace(cuda=_Cuda(), zeros=lambda *a, **k: None)
-            with patch.dict(sys.modules, {"torch": fake_torch}), patch.object(upstream, "ensure_source") as ensure, patch.object(cli, "load_model", return_value=session), patch.object(cli, "resolve_model_source", return_value=(root, root)):
-                cli.main_hpsv3pp(["--input", str(records), "--output", str(output), "--model", "repo", "--revision", "r1", "--local-files-only", "--processor-dir", str(root), "--batch-size", "2", "--iter-step", "0.25"])
-            ensure.assert_called_once_with(local_files_only=True)
+            with patch.dict(sys.modules, {"torch": fake_torch}), patch.object(upstream, "ensure_source") as ensure, patch.object(cli, "load_model", return_value=session) as load, patch.object(cli, "resolve_model_source", return_value=(root, root)):
+                cli.main_hpsv3pp(["--input", str(records), "--output", str(output), "--model", "repo", "--revision", "r1", "--local-files-only", "--source-dir", str(root / "source"), "--processor-dir", str(root), "--batch-size", "2", "--iter-step", "0.25"])
+            ensure.assert_called_once_with(local_files_only=True, source_directory=str(root / "source"))
+            self.assertEqual(load.call_args.kwargs["source_directory"], str(root / "source"))
             result = json.loads(output.read_text())
             self.assertEqual([row["id"] for row in result["scores"]], ["0", "1", "2"])
             self.assertEqual(session.calls[0][1:], (2, ["p0", "p1"], {"iter_step": 0.25}))
             self.assertEqual(session.calls[1][1:], (1, ["p2"], {"iter_step": 0.25}))
+
+    def test_huggingface_offline_constant_is_forwarded(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            image = root / "image.png"
+            Image.new("RGB", (2, 2)).save(image)
+            records = root / "records.json"
+            records.write_text(json.dumps([{"id": "image", "image": str(image), "prompt": "p"}]))
+            session = _Session()
+            fake_torch = types.SimpleNamespace(cuda=_Cuda(), zeros=lambda *a, **k: None)
+            with patch.dict(sys.modules, {"torch": fake_torch}), \
+                 patch.object(cli, "HF_HUB_OFFLINE", True), \
+                 patch.object(upstream, "ensure_source") as ensure, \
+                 patch.object(cli, "resolve_model_source", return_value=(root, root)) as resolve, \
+                 patch.object(cli, "load_model", return_value=session):
+                cli.main_hpsv3pp(["--input", str(records), "--output", str(root / "out.json"), "--source-dir", str(root / "source")])
+            ensure.assert_called_once_with(local_files_only=True, source_directory=str(root / "source"))
+            self.assertTrue(resolve.call_args.kwargs["local_files_only"])
 
     def test_no_prompt_captions_are_saved(self):
         with tempfile.TemporaryDirectory() as name:

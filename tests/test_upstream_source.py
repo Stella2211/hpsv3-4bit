@@ -50,7 +50,7 @@ class UpstreamSourceTests(unittest.TestCase):
         )
 
     def test_import_has_no_network_and_local_source_is_loaded(self):
-        with self._patch_source(), patch.dict(os.environ, {"HPSV3PP_SOURCE_DIR": str(self.base)}, clear=False):
+        with self._patch_source():
             target = self.base / upstream.COMMIT
             for relative, data in self.files.items():
                 path = target / relative
@@ -67,50 +67,50 @@ class UpstreamSourceTests(unittest.TestCase):
             normal_spec.loader.exec_module(normal_module)
             self.assertEqual(normal_module.VALUE, 9)
             with patch.object(upstream, "urlopen", side_effect=AssertionError("network")):
-                self.assertEqual(upstream.load_prompts(), {"INSTRUCTION": "instruction {text_prompt}", "prompt_with_special_token": "reward", "prompt_without_special_token": "plain"})
-                self.assertEqual(upstream.load_model_module().VALUE, 7)
+                self.assertEqual(upstream.load_prompts(self.base), {"INSTRUCTION": "instruction {text_prompt}", "prompt_with_special_token": "reward", "prompt_without_special_token": "plain"})
+                self.assertEqual(upstream.load_model_module(self.base).VALUE, 7)
 
     def test_download_is_atomic_and_failed_download_leaves_no_partial_source(self):
-        with self._patch_source(), patch.dict(os.environ, {"HPSV3PP_SOURCE_DIR": str(self.base)}, clear=False):
+        with self._patch_source():
             response = _Response(self.files[next(iter(self.files))])
             with patch.object(upstream, "urlopen", return_value=response):
                 with self.assertRaises(upstream.SourceProvisionError):
-                    upstream.ensure_source()
+                    upstream.ensure_source(source_directory=self.base)
             self.assertFalse((self.base / upstream.COMMIT).exists())
             self.assertEqual(list(self.base.glob(".*staging-*")), [])
 
     def test_corrupt_cache_is_repaired_atomically(self):
-        with self._patch_source(), patch.dict(os.environ, {"HPSV3PP_SOURCE_DIR": str(self.base)}, clear=False):
+        with self._patch_source():
             responses = [_Response(self.files[name]) for name in self.files]
             with patch.object(upstream, "urlopen", side_effect=responses):
-                target = upstream.ensure_source()
+                target = upstream.ensure_source(source_directory=self.base)
             (target / "hpsv3/model/qwen3vl_rm.py").write_bytes(b"corrupt")
             responses = [_Response(self.files[name]) for name in self.files]
             with patch.object(upstream, "urlopen", side_effect=responses):
-                repaired = upstream.ensure_source()
+                repaired = upstream.ensure_source(source_directory=self.base)
             self.assertEqual(repaired, target)
             self.assertEqual((target / "hpsv3/model/qwen3vl_rm.py").read_bytes(), self.files["hpsv3/model/qwen3vl_rm.py"])
             self.assertEqual(list(self.base.glob(".*invalid-*")), [])
 
     def test_invalid_hash_is_rejected(self):
-        with self._patch_source(), patch.dict(os.environ, {"HPSV3PP_SOURCE_DIR": str(self.base)}, clear=False):
+        with self._patch_source():
             response = _Response(self.files["hpsv3/model/qwen3vl_rm.py"] + b"bad")
             with patch.object(upstream, "urlopen", return_value=response):
                 with self.assertRaises(upstream.SourceProvisionError):
-                    upstream.ensure_source()
+                    upstream.ensure_source(source_directory=self.base)
             self.assertFalse((self.base / upstream.COMMIT).exists())
 
     def test_interruption_removes_staging(self):
-        with self._patch_source(), patch.dict(os.environ, {"HPSV3PP_SOURCE_DIR": str(self.base)}):
+        with self._patch_source():
             with patch.object(upstream, "urlopen", side_effect=KeyboardInterrupt):
                 with self.assertRaises(KeyboardInterrupt):
-                    upstream.ensure_source()
+                    upstream.ensure_source(source_directory=self.base)
             self.assertEqual(list(self.base.iterdir()), [])
 
     def test_failed_repair_publication_restores_old_cache(self):
-        with self._patch_source(), patch.dict(os.environ, {"HPSV3PP_SOURCE_DIR": str(self.base)}):
+        with self._patch_source():
             with patch.object(upstream, "urlopen", side_effect=[_Response(data) for data in self.files.values()]):
-                target = upstream.ensure_source()
+                target = upstream.ensure_source(source_directory=self.base)
             corrupt = target / "hpsv3/model/qwen3vl_rm.py"
             corrupt.write_bytes(b"original broken cache")
             replace = os.replace
@@ -121,7 +121,7 @@ class UpstreamSourceTests(unittest.TestCase):
             with patch.object(upstream, "urlopen", side_effect=[_Response(data) for data in self.files.values()]), \
                  patch.object(upstream.os, "replace", side_effect=fail_publication):
                 with self.assertRaisesRegex(OSError, "publication failed"):
-                    upstream.ensure_source()
+                    upstream.ensure_source(source_directory=self.base)
             self.assertEqual(corrupt.read_bytes(), b"original broken cache")
             self.assertEqual(list(self.base.glob(".*")), [])
 
@@ -132,18 +132,16 @@ class UpstreamSourceTests(unittest.TestCase):
                 target.symlink_to(outside, target_is_directory=True)
             except OSError as error:
                 self.skipTest(f"Symlinks unavailable: {error}")
-            with self._patch_source(), patch.dict(os.environ, {"HPSV3PP_SOURCE_DIR": str(self.base)}), \
+            with self._patch_source(), \
                  patch.object(upstream, "urlopen", side_effect=AssertionError("network")):
                 with self.assertRaisesRegex(upstream.SourceProvisionError, "symlink"):
-                    upstream.ensure_source()
+                    upstream.ensure_source(source_directory=self.base)
             self.assertEqual(list(Path(outside).iterdir()), [])
 
     def test_offline_mode_requires_existing_validated_source(self):
-        with self._patch_source(), patch.dict(
-            os.environ, {"HPSV3PP_SOURCE_DIR": str(self.base), "HF_HUB_OFFLINE": "1"}, clear=False
-        ), patch.object(upstream, "urlopen", side_effect=AssertionError("network")):
+        with self._patch_source(), patch.object(upstream, "urlopen", side_effect=AssertionError("network")):
             with self.assertRaises(upstream.SourceProvisionError):
-                upstream.ensure_source()
+                upstream.ensure_source(local_files_only=True, source_directory=self.base)
 
 
 if __name__ == "__main__":

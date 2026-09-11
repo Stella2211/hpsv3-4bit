@@ -104,6 +104,19 @@ class RuntimeApiTests(unittest.TestCase):
             session = load_model("hpsv3", "/tmp/model", "cpu")
         self.assertIs(session.inferencer, fake)
 
+    def test_load_model_forwards_hpsv3pp_source_directory(self):
+        fake = FakeInferencer()
+        captured = {}
+        module = types.ModuleType("hpsv3_4bit.hpsv3pp.quantized")
+        def load(**kwargs):
+            captured.update(kwargs)
+            return fake
+        module.HPSv3PPQuantizedInferencer = types.SimpleNamespace(from_merged_dir=load)
+        with patch.dict(sys.modules, {"hpsv3_4bit.hpsv3pp.quantized": module}):
+            session = load_model("hpsv3pp", "/tmp/model", "cpu", source_directory="/tmp/source")
+        self.assertIs(session.inferencer, fake)
+        self.assertEqual(Path(captured["source_directory"]), Path("/tmp/source"))
+
     def test_missing_local_model_is_rejected_without_download(self):
         from hpsv3_4bit.hpsv3.quantized import HPSv3QuantizedInferencer
         with self.assertRaises(FileNotFoundError):
@@ -209,11 +222,12 @@ class RuntimeApiTests(unittest.TestCase):
                 return Model(), {"missing_keys": [], "mismatched_keys": [], "unexpected_keys": [], "error_msgs": []}
             fake_class = types.SimpleNamespace(from_pretrained=staticmethod(load))
             with patch.object(module.AutoProcessor, "from_pretrained", return_value=Processor()), \
-                 patch.object(module, "get_reward_model_class", return_value=fake_class), \
+                 patch.object(module, "get_reward_model_class", return_value=fake_class) as reward_class, \
                  patch.object(module, "install_vision_interpolation_hook"), \
                  patch.object(module, "_restore_capability_dtype"), \
                  patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()):
-                module.HPSv3PPQuantizedInferencer.from_merged_dir(directory, device="cpu")
+                module.HPSv3PPQuantizedInferencer.from_merged_dir(directory, device="cpu", source_directory="/tmp/source")
+            reward_class.assert_called_once_with(source_directory="/tmp/source")
         self.assertTrue(captured["local_files_only"])
         self.assertFalse(captured["trust_remote_code"])
         self.assertTrue(captured["use_safetensors"])
@@ -241,6 +255,18 @@ class RuntimeApiTests(unittest.TestCase):
             with patch.object(module, "_batch", return_value={"input_ids": torch.tensor([[7, 7], [1, 2]])}):
                 with self.assertRaisesRegex(ValueError, "exactly one reward token"):
                     inferencer.prepare_batch(images, ["a", "b"])
+
+    def test_hpsv3pp_prompt_loader_receives_source_directory(self):
+        import torch
+        import hpsv3_4bit.hpsv3pp.quantized as module
+        processor = types.SimpleNamespace(tokenizer=types.SimpleNamespace(convert_tokens_to_ids=lambda token: 7))
+        inferencer = module.HPSv3PPQuantizedInferencer(object(), processor, "cpu", "/tmp/source")
+        batch = {"input_ids": torch.tensor([[1, 7, 2]])}
+        with patch.object(module, "load_prompts", return_value={
+            "INSTRUCTION": "{text_prompt}", "prompt_with_special_token": "<|Reward|>"}) as prompts, \
+             patch.object(module, "_batch", return_value=batch):
+            inferencer.prepare_batch([Image.new("RGB", (28, 28))], ["prompt"])
+        prompts.assert_called_once_with("/tmp/source")
 
     def test_incomplete_checkpoint_loads_are_never_accepted(self):
         import importlib

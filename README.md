@@ -45,7 +45,7 @@ dependencies. Existing model downloads remain usable.
 The first `hpsv3pp-score` invocation fetches the reviewed HPSv3++ compatibility
 files from the author GitHub repository over HTTPS, verifies their SHA-256
 hashes, and stores them under `~/.cache/hpsv3-4bit/upstream/<commit>` by
-default. `HPSV3PP_SOURCE_DIR` may override the cache base; the fixed commit
+default. Use `--source-dir PATH` to override the cache base; the fixed commit
 name is appended beneath that base. The scorer never runs Git, pip, or a child
 process at inference time. If preparation fails, restore network access and rerun
 the scorer. ComfyUI users can reinstall the extension through Manager instead.
@@ -181,9 +181,14 @@ Library users can explicitly prepare the reviewed source before loading:
 from hpsv3_4bit.hpsv3pp.upstream import ensure_source
 from hpsv3_4bit import load_model
 
-ensure_source()
-session = load_model("hpsv3pp", "/local/HPSv3-PlusPlus-bnb-NF4")
+source_dir = "/local/hpsv3-source"
+ensure_source(source_directory=source_dir)
+session = load_model("hpsv3pp", "/local/HPSv3-PlusPlus-bnb-NF4", source_directory=source_dir)
 ```
+
+Pass `source_directory=...` to both calls when using a custom compatibility
+source cache from Python. Existing users of `HPSV3PP_SOURCE_DIR` should migrate
+to this keyword or the CLI's `--source-dir` option.
 
 Model acquisition stays outside inference; `load_model` never downloads.
 Both the new API and CLIs require serialized NF4 checkpoints. If you used

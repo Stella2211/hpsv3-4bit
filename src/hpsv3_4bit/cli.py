@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from PIL import Image
+from huggingface_hub.constants import HF_HUB_OFFLINE
 
 from .model_source import resolve_model_source
 from .runtime import load_model
@@ -64,6 +65,7 @@ def build_parser(family: str) -> argparse.ArgumentParser:
                         help="Prompt file extension for directory input (default: .txt)")
     parser.add_argument("--no-prompt", action="store_true", help="Generate captions and score against them")
     if family == "hpsv3pp":
+        parser.add_argument("--source-dir", help="Base directory for reviewed HPSv3++ source cache")
         parser.add_argument("--iter-step", type=unit_interval, default=0.0,
                             help="HPSv3++ conditioning value in [0, 1] (default: 0.0)")
     return parser
@@ -73,7 +75,10 @@ def run(family: str, args: argparse.Namespace) -> dict:
     if family == "hpsv3pp":
         from .hpsv3pp.upstream import ensure_source
 
-        ensure_source(local_files_only=args.local_files_only)
+        local_files_only = args.local_files_only or HF_HUB_OFFLINE
+        ensure_source(local_files_only=local_files_only, source_directory=args.source_dir)
+    else:
+        local_files_only = args.local_files_only or HF_HUB_OFFLINE
     records = load_records(args.input, args.prompt_ext, args.no_prompt)
     if family == "hpsv3pp":
         empty = {"scores": [], "load_time_sec": 0.0, "load_peak_vram_gb": 0.0,
@@ -90,9 +95,10 @@ def run(family: str, args: argparse.Namespace) -> dict:
     torch.cuda.reset_peak_memory_stats(0)
     started = time.time()
     model_dir, processor_dir = resolve_model_source(family, args.merged_dir, revision=args.revision,
-                                                     local_files_only=args.local_files_only,
+                                                     local_files_only=local_files_only,
                                                      processor_dir=args.processor_dir)
-    session = load_model(family, model_dir, device="cuda:0", processor_directory=processor_dir)
+    session = load_model(family, model_dir, device="cuda:0", processor_directory=processor_dir,
+                         source_directory=getattr(args, "source_dir", None))
     load_time = time.time() - started
     load_peak = torch.cuda.max_memory_allocated(0) / 1e9
     print(f"Loaded 4-bit {family} in {load_time:.1f}s, peak VRAM after load: {load_peak:.2f} GB")
