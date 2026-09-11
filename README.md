@@ -20,7 +20,7 @@ Hugging Face; subsequent runs use the cache.
 - NVIDIA GPU with CUDA support. A 12 GB card provides room for model weights
   and inference; memory use depends on image resolution and batch size.
 - An NVIDIA driver compatible with CUDA 13.0, the PyTorch wheel index
-  configured in both projects.
+  configured in the root inference project.
 - Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
 - About 8 GB disk space per model, plus Python environments and download
   temporary space.
@@ -28,21 +28,27 @@ Hugging Face; subsequent runs use the cache.
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/Stella2211/hpsv3-4bit
+git clone https://github.com/Stella2211/hpsv3-4bit
 cd hpsv3-4bit
 ```
 
-Install the scorer you want to use (or run both commands for both scorers):
+Install both scorers into one inference environment:
 
 ```bash
-uv sync --project hpsv3
-uv sync --project hpsv3pp
+uv sync
 ```
 
-The projects use separate environments because they require different
-Transformers versions: 4.46.3 for HPSv3 and 4.57.0 for HPSv3++.
-HPSv3++ also requires the pinned upstream submodule. If you cloned without
-submodules, run `git submodule update --init`.
+Both scorers now use the canonical `hpsv3_4bit` package on Transformers
+5.17.x. Scoring does not require the nested upstream submodule or training
+dependencies. Existing model downloads remain usable.
+
+When updating an older checkout, run `uv sync` at the repository root and
+replace `uv run --project hpsv3 hpsv3/scripts/score_batch.py` with
+`uv run hpsv3-score` (and likewise `hpsv3pp-score`). CLI options and
+result JSON fields are preserved. Old script paths are thin entry points
+and can still be run with `uv run python hpsv3/scripts/score_batch.py` or
+`uv run python hpsv3pp/scripts/score_batch.py` in the root environment.
+The former project environments are now for conversion only.
 
 ## Score images
 
@@ -59,8 +65,8 @@ Relative image paths are resolved from the current working directory.
 Run either scorer:
 
 ```bash
-uv run --project hpsv3 hpsv3/scripts/score_batch.py --input records.json --output scores.json
-uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py --input records.json --output scores.json
+uv run hpsv3-score --input records.json --output scores.json
+uv run hpsv3pp-score --input records.json --output scores.json
 ```
 
 Each command writes a JSON object with a `scores` list of `id`/`score` pairs,
@@ -76,7 +82,7 @@ Use `--prompt-ext` to change the text-file extension. Output IDs are image
 file names.
 
 ```bash
-uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py --input images --output scores.json
+uv run hpsv3pp-score --input images --output scores.json
 ```
 
 ### Images without prompts
@@ -88,7 +94,7 @@ JSON `prompt` fields are then unnecessary. Captions are saved as
 reward-finetuned model and may misdescribe an image.
 
 ```bash
-uv run --project hpsv3pp hpsv3pp/scripts/score_batch.py --input images --no-prompt --output scores.json
+uv run hpsv3pp-score --input images --no-prompt --output scores.json
 ```
 
 ### Batch size and conditioning
@@ -127,33 +133,44 @@ captioning. Existing NF4 model files remain usable; update the wrapper code
 to obtain this correction. Re-evaluate HPSv3 scores produced with older
 wrapper code.
 
-Run each example in its corresponding project environment, from the repository root.
-
-HPSv3 (`uv run --project hpsv3 python`):
+Run `uv run python` from the repository root:
 
 ```python
-import sys
-sys.path.insert(0, "hpsv3/src")
-from evaluation.hpsv3_quantized import HPSv3QuantizedInferencer
+from PIL import Image
+from hpsv3_4bit import load_model
 
-scorer = HPSv3QuantizedInferencer.from_merged_dir()
-scores = scorer.score(["images/cat.png"], ["a cat sitting by a window"])
+session = load_model("hpsv3pp", "/local/HPSv3-PlusPlus-bnb-NF4")
+image = Image.open("images/cat.png").convert("RGB")
+score = session.score(image, "a cat sitting by a window")
+caption = session.caption(image)
+scores = session.score_batch([image], ["a cat sitting by a window"], iter_step=0.0)
 ```
 
-HPSv3++ (`uv run --project hpsv3pp python`):
+Use family `"hpsv3"` for HPSv3. `score` returns one float and `caption`
+returns one string. `score_batch` returns a list using a single batched
+forward; it preserves CLI batch composition and HPSv3++ conditioning.
+For independent per-image scores, call `score` for each pair.
+
+The former `evaluation.hpsv3_quantized` and `evaluation.hpsv3pp_quantized`
+inference APIs have been removed. Replace their list-based calls with
+`score_batch` and single-image `caption` calls. The public loader accepts
+local directories only. Applications needing the CLI's Hub resolution can
+explicitly resolve files before loading:
 
 ```python
-import sys
-sys.path.insert(0, "hpsv3pp/src")
-from evaluation.hpsv3pp_quantized import HPSv3PPQuantizedInferencer
+from hpsv3_4bit.model_source import resolve_model_source
 
-scorer = HPSv3PPQuantizedInferencer.from_merged_dir()
-scores = scorer.score(["images/cat.png"], ["a cat sitting by a window"], iter_step=0.0)
+directory, processor_directory = resolve_model_source(
+    "hpsv3pp", revision=None, local_files_only=False,
+)
+session = load_model("hpsv3pp", directory, processor_directory=processor_directory)
 ```
 
-`from_merged_dir()` accepts an optional local path or Hub repository ID,
-plus `revision=` and `local_files_only=`. Use these custom reward-model
-classes for scoring; generic `AutoModel` loading does not provide this interface.
+Model acquisition stays outside inference; `load_model` never downloads.
+Both the new API and CLIs require serialized NF4 checkpoints. If you used
+the old loader to quantize a BF16 directory on the fly, first run the
+corresponding `export_bnb.py` in its conversion environment and pass the
+exported directory to the new scorer.
 
 ## Quantization
 
@@ -162,6 +179,20 @@ heads and conditioning modules are excluded from 4-bit quantization;
 excluded modules retain floating-point weights, which does not imply FP32.
 
 In our comparison, GPTQ had comparable quality to bnb 4-bit but used more VRAM.
+
+BF16 merging and NF4 export retain their separate conversion environments:
+
+```bash
+git submodule update --init --recursive
+uv sync --project hpsv3
+uv sync --project hpsv3pp
+```
+
+Run conversion scripts with their existing `uv run --project hpsv3 ...` or
+`uv run --project hpsv3pp ...` commands. Those projects retain Transformers
+4.46.3 and 4.57.0 respectively for the original checkpoint construction
+paths. They are not inference environments. Their conversion-only model
+definitions do not implement CLI Score or Caption.
 
 ## Licensing notes
 
@@ -187,13 +218,13 @@ In our comparison, GPTQ had comparable quality to bnb 4-bit but used more VRAM.
 
 ## Canonical host runtime
 
-`src/hpsv3_4bit` provides the inference-only runtime used by host integrations
+`src/hpsv3_4bit` provides the shared runtime used by both CLIs and host integrations
 on Transformers 5.17.x. Import `hpsv3_4bit.load_model` with family `hpsv3` or
-`hpsv3pp` and a local merged NF4 directory. The older `hpsv3/` and `hpsv3pp/`
-projects remain separate CLI environments and are retained as regression
-baselines.
+`hpsv3pp` and a local merged NF4 directory. All NF4 loading, Score and Caption
+implementations are maintained here; CLI modules only resolve files and
+adapt command-line input/output.
 
-The canonical runtime does not download models, execute commands, import
+The inference API does not download models, execute commands, import
 training packages, or load remote code. It requires local serialized
 bitsandbytes NF4 checkpoints and preserves the upstream reward protocols.
 
@@ -211,8 +242,9 @@ score = session.score(image, "An image description.")
 caption = session.caption(image, max_new_tokens=96)
 ```
 
-Each score call evaluates one pair; HPSv3++ fixes the iteration condition at
-zero. The host owns model lifetime and may pass `check_cancel` to `load_model`
+Each `score` call evaluates one pair with iteration condition zero.
+`score_batch` also supports explicit HPSv3++ iteration conditioning.
+The host owns model lifetime and may pass `check_cancel` to `load_model`
 and Transformers stopping criteria to `caption`. HPSv3++ code permission must
 be resolved before publishing this runtime or its wheel. See the notices
 inside `src/hpsv3_4bit/`.

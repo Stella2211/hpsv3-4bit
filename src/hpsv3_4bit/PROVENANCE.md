@@ -1,7 +1,10 @@
 # Reusable runtime provenance
 
 This package adapts the inference implementations and reward model classes
-from the sibling HPSv3 projects in this repository. HPSv3 source is MIT and
+from the sibling HPSv3 projects in this repository. The shared runtime is
+the maintained inference implementation for both CLIs and host integrations;
+the sibling projects retain only conversion-specific model construction.
+HPSv3 source is MIT and
 is identified in `hpsv3/model.py`. The HPSv3++ reward model is copied from the
 pinned `PlantPotatoOnMoon/HPSv3-PlusPlus` submodule at commit
 `6a095f68ee98330bf22365f872ed609bd44a216f`. That upstream tree does not carry

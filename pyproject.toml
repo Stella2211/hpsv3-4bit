@@ -1,7 +1,7 @@
 [project]
 name = "hpsv3-4bit-runtime"
 version = "0.1.0"
-description = "Inference-only HPSv3 and HPSv3++ NF4 runtime for Transformers 5.17"
+description = "Shared HPSv3 and HPSv3++ NF4 inference runtime and scoring CLIs"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.0,<2",
@@ -11,8 +11,22 @@ dependencies = [
     "qwen-vl-utils>=0.0.14,<0.1",
     "safetensors>=0.8",
     "torch>=2.9",
+    "torchvision>=0.24",
     "transformers>=5.17,<5.18",
 ]
+
+[project.scripts]
+hpsv3-score = "hpsv3_4bit.cli:main_hpsv3"
+hpsv3pp-score = "hpsv3_4bit.cli:main_hpsv3pp"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

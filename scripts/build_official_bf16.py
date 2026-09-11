@@ -29,7 +29,7 @@ def build(project: str, checkpoint: str, base_model: str, output_dir: str,
         raise ValueError("Official checkpoint SHA-256 mismatch")
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / project / "src"))
     if project == "hpsv3pp":
-        from evaluation.hpsv3pp_quantized import Qwen3VLRewardModelFiLMHybrid as Model
+        from evaluation._conversion import Qwen3VLRewardModelFiLMHybrid as Model
         embedding_key = "model.language_model.embed_tokens.weight"
     else:
         from evaluation.hpsv3_model import Qwen2VLRewardModelBT as Model

@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.evaluation.hpsv3_quantized import merge_and_save_bf16
+from src.evaluation._conversion import merge_and_save_bf16
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)

@@ -87,10 +87,13 @@ def _patch_quantized_visual_dtype(model):
 
 
 def _batch(processor, image, text, device):
-    messages = [{"role": "user", "content": [{"type": "image", "image": image,
-        "min_pixels": MIN_PIXELS, "max_pixels": MAX_PIXELS}, {"type": "text", "text": text}]}]
+    images, texts = (image, text) if isinstance(image, (list, tuple)) else ([image], [text])
+    messages = [[{"role": "user", "content": [{"type": "image", "image": item,
+        "min_pixels": MIN_PIXELS, "max_pixels": MAX_PIXELS}, {"type": "text", "text": prompt}]}]
+        for item, prompt in zip(images, texts)]
     image_inputs, _ = process_vision_info(messages)
-    batch = processor(text=processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True),
+    batch = processor(text=[processor.apply_chat_template(message, tokenize=False, add_generation_prompt=True)
+                            for message in messages],
                       images=image_inputs, padding=True, return_tensors="pt")
     return {key: value.to(device) if isinstance(value, torch.Tensor) else value for key, value in batch.items()}
 
@@ -102,15 +105,26 @@ class HPSv3QuantizedInferencer:
     device: str = "cuda"
 
     @classmethod
-    def from_merged_dir(cls, merged_dir, device="cuda", check_cancel=None):
+    def from_merged_dir(cls, merged_dir, device="cuda", check_cancel=None, processor_directory=None):
         check_cancel = check_cancel or (lambda: None)
         directory = _local_model_dir(merged_dir)
         check_cancel()
-        processor = _load_processor(directory)
+        processor_path = directory if processor_directory is None else _local_model_dir(processor_directory)
+        processor = _load_processor(processor_path)
+        # Base Qwen processors do not contain the reward token. Recreate the
+        # original CLI override behavior, then validate its ID against the
+        # checkpoint before loading any model weights.
+        if processor_path != directory and SPECIAL_REWARD_TOKEN not in processor.tokenizer.get_vocab():
+            processor.tokenizer.add_special_tokens({"additional_special_tokens": [SPECIAL_REWARD_TOKEN]})
         check_cancel()
         settings = _validate_checkpoint(directory, processor)
+        config = load_merged_config(directory, processor.tokenizer)
+        # Transformers 5 nests text settings; the reward pooling code also
+        # needs the tokenizer's padding ID on the outer config for batches.
+        config.pad_token_id = processor.tokenizer.pad_token_id
+        config.use_cache = False
         model, info = Qwen2VLRewardModelBT.from_pretrained(
-            str(directory), config=load_merged_config(directory, processor.tokenizer), **settings,
+            str(directory), config=config, **settings,
             torch_dtype=torch.bfloat16, attn_implementation="sdpa", quantization_config=None,
             device_map={"": str(device)}, use_safetensors=True, output_loading_info=True,
             local_files_only=True, trust_remote_code=False, key_mapping=KEY_MAPPING)
@@ -123,11 +137,12 @@ class HPSv3QuantizedInferencer:
         return cls(model, processor, str(device))
 
     def prepare_batch(self, image_paths: Sequence, prompts: Sequence[str]):
-        if len(image_paths) != 1 or len(prompts) != 1:
-            raise ValueError("single-pair inference requires exactly one image and prompt")
-        batch = _batch(self.processor, image_paths[0], INSTRUCTION.format(text_prompt=prompts[0]) + PROMPT_WITH_SPECIAL_TOKEN, self.device)
+        if not image_paths or len(image_paths) != len(prompts):
+            raise ValueError("Provide a nonempty batch with one prompt per image.")
+        batch = _batch(self.processor, list(image_paths),
+                       [INSTRUCTION.format(text_prompt=prompt) + PROMPT_WITH_SPECIAL_TOKEN for prompt in prompts], self.device)
         token_id = self.processor.tokenizer.convert_tokens_to_ids(SPECIAL_REWARD_TOKEN)
-        if (batch["input_ids"] == token_id).sum().item() != 1:
+        if not torch.all((batch["input_ids"] == token_id).sum(dim=1) == 1).item():
             raise ValueError("Each scoring request must contain exactly one reward token.")
         return batch
 
@@ -138,9 +153,9 @@ class HPSv3QuantizedInferencer:
 
     def score(self, image_paths, prompts):
         rewards = self.reward(image_paths, prompts)
-        if rewards.shape[0] != 1:
-            raise ValueError("Expected one reward result")
-        return [rewards[0, 0].item()]
+        if rewards.shape[0] != len(image_paths):
+            raise ValueError("Reward result count does not match the image count")
+        return rewards[:, 0].tolist()
 
     @torch.inference_mode()
     def caption(self, image_paths, max_new_tokens=96, instruction=CAPTION_INSTRUCTION, stopping_criteria=None):

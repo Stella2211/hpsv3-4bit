@@ -2,19 +2,17 @@
 
 The published NF4 model downloads automatically on first use.
 Usage (from the repository root):
-    uv run --project hpsv3 hpsv3/scripts/smoke_test.py --image img.png --prompt "a cat"
+    uv run python hpsv3/scripts/smoke_test.py --image img.png --prompt "a cat"
 """
 
 import argparse
-import sys
 import time
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
+from PIL import Image
 
-from src.evaluation.hpsv3_quantized import HPSv3QuantizedInferencer
+from hpsv3_4bit.model_source import resolve_model_source
+from hpsv3_4bit.runtime import load_model
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
@@ -45,17 +43,19 @@ if __name__ == "__main__":
     torch.cuda.reset_peak_memory_stats(0)
 
     t0 = time.time()
-    inferencer = HPSv3QuantizedInferencer.from_merged_dir(
-        args.merged_dir, device="cuda:0", processor_dir=args.processor_dir,
-            revision=args.revision, local_files_only=args.local_files_only
-    )
+    model_dir, processor_dir = resolve_model_source("hpsv3", args.merged_dir, revision=args.revision, local_files_only=args.local_files_only, processor_dir=args.processor_dir)
+    session = load_model("hpsv3", model_dir, device="cuda:0", processor_directory=processor_dir)
     load_time = time.time() - t0
     load_peak_gb = torch.cuda.max_memory_allocated(0) / 1e9
     print(f"Loaded 4-bit model in {load_time:.1f}s, peak VRAM after load: {load_peak_gb:.2f} GB")
 
     torch.cuda.reset_peak_memory_stats(0)
     t0 = time.time()
-    scores = inferencer.score(args.image, args.prompt)
+    images = []
+    for path in args.image:
+        with Image.open(path) as image:
+            images.append(image.convert("RGB"))
+    scores = session.score_batch(images, args.prompt)
     infer_time = time.time() - t0
     infer_peak_gb = torch.cuda.max_memory_allocated(0) / 1e9
 

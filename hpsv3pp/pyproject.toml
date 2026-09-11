@@ -1,7 +1,7 @@
 [project]
 name = "hpsv3pp-4bit"
 version = "0.1.0"
-description = "4-bit (bitsandbytes NF4) inference for the HPSv3++ reward model (Qwen3-VL-8B backbone) on a 12GB GPU. Kept as its own uv project because HPSv3++ needs transformers==4.57.0 (Qwen3-VL support), incompatible with the transformers==4.46.3 pinned by the sibling HPSv3 project."
+description = "HPSv3++ BF16 checkpoint construction and NF4 export tools on the original Transformers 4.57.0 layout. Use the repository root project for inference."
 requires-python = ">=3.12"
 dependencies = [
     "torch>=2.9.0",

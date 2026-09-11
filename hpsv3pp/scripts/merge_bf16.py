@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from evaluation.hpsv3pp_quantized import merge_and_save_bf16, BASE_MODEL_NAME
+from evaluation._conversion import merge_and_save_bf16, BASE_MODEL_NAME
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)

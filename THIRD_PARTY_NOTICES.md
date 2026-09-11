@@ -47,7 +47,8 @@ Modifications Copyright (c) 2026 stella.
 The adaptation keeps CUDA support, removes the XPU branch, imports
 `PartialState` lazily, uses `process_index` instead of `local_process_index`,
 renames the helper and installs it only if TRL does not provide it.
-It is intended for single-GPU inference.
+It is retained for the legacy conversion environment; the shared inference
+runtime does not import TRL or this shim.
 
 This file is licensed under Apache-2.0, separately from the repository's MIT
 license. The full upstream license is included in
