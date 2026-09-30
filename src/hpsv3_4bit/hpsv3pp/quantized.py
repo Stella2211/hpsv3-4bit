@@ -101,7 +101,6 @@ class HPSv3PPQuantizedInferencer:
         # Transformers 5 nests text settings; the reward pooling code also
         # needs the tokenizer's padding ID on the outer config for batches.
         config.pad_token_id = processor.tokenizer.pad_token_id
-        config.use_cache = False
         reward_model_class = get_reward_model_class(source_directory=source_directory)
         model, info = reward_model_class.from_pretrained(
             str(directory), config=config, **settings,
@@ -113,10 +112,6 @@ class HPSv3PPQuantizedInferencer:
             raise ValueError(f"Backbone checkpoint mismatch: {info}")
         install_vision_interpolation_hook(model)
         _restore_capability_dtype(model, directory)
-        for name in ("rm_head", "cond_encoder", "film_gen", "scale_gen", "shift_gen", "cond_head", "attn_proj", "margin_head", "sim_proj", "var_proj", "cross_attn", "key_proj", "pair_margin_head", "group_encoder"):
-            module = getattr(model, name, None)
-            if module is not None:
-                module.float()
         model.eval()
         return cls(model, processor, str(device), source_directory)
 

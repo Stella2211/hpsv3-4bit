@@ -160,7 +160,6 @@ class RuntimeApiTests(unittest.TestCase):
         class Processor:
             tokenizer = Tokenizer()
         class Model:
-            rm_head = types.SimpleNamespace(float=lambda: None)
             def eval(self): return self
         captured = {}
         with tempfile.TemporaryDirectory() as name:
@@ -184,7 +183,6 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertTrue(captured["use_safetensors"])
         self.assertTrue(captured["output_loading_info"])
         self.assertEqual(captured["config"].pad_token_id, 0)
-        self.assertFalse(captured["config"].use_cache)
 
     def test_invalid_nf4_and_reward_settings_are_rejected(self):
         import hpsv3_4bit.hpsv3.quantized as module
@@ -206,7 +204,6 @@ class RuntimeApiTests(unittest.TestCase):
         class Processor:
             tokenizer = Tokenizer()
         class Model:
-            rm_head = types.SimpleNamespace(float=lambda: None)
             def eval(self): return self
         captured = {}
         with tempfile.TemporaryDirectory() as name:
@@ -233,7 +230,6 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertTrue(captured["use_safetensors"])
         self.assertTrue(captured["output_loading_info"])
         self.assertEqual(captured["config"].pad_token_id, 0)
-        self.assertFalse(captured["config"].use_cache)
 
     def test_quantized_prepare_batch_validates_each_row_and_pairing(self):
         import importlib

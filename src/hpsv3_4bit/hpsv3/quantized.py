@@ -122,7 +122,6 @@ class HPSv3QuantizedInferencer:
         # Transformers 5 nests text settings; the reward pooling code also
         # needs the tokenizer's padding ID on the outer config for batches.
         config.pad_token_id = processor.tokenizer.pad_token_id
-        config.use_cache = False
         model, info = Qwen2VLRewardModelBT.from_pretrained(
             str(directory), config=config, **settings,
             torch_dtype=torch.bfloat16, attn_implementation="sdpa", quantization_config=None,
@@ -131,7 +130,6 @@ class HPSv3QuantizedInferencer:
         check_cancel()
         if info.get("missing_keys") or info.get("mismatched_keys") or info.get("error_msgs") or info.get("unexpected_keys"):
             raise ValueError(f"Backbone checkpoint mismatch: {info}")
-        model.rm_head.float()
         _patch_quantized_visual_dtype(model)
         model.eval()
         return cls(model, processor, str(device))
