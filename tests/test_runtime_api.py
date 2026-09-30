@@ -183,6 +183,7 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertTrue(captured["use_safetensors"])
         self.assertTrue(captured["output_loading_info"])
         self.assertEqual(captured["config"].pad_token_id, 0)
+        self.assertEqual((captured["output_dim"], captured["reward_token_id"]), (2, 7))
 
     def test_invalid_nf4_and_reward_settings_are_rejected(self):
         import hpsv3_4bit.hpsv3.quantized as module
@@ -276,7 +277,7 @@ class RuntimeApiTests(unittest.TestCase):
                 with self.subTest(family=family, field=field), tempfile.TemporaryDirectory() as directory:
                     patches = [
                         patch.object(module, "_load_processor", return_value=types.SimpleNamespace(tokenizer=types.SimpleNamespace(pad_token_id=0))),
-                        patch.object(module, "_validate_checkpoint", return_value={}),
+                        patch.object(module, "_validate_checkpoint", return_value={"output_dim": 2, "special_token_ids": [7]}),
                         patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()),
                         patch.object(model_class, "from_pretrained", return_value=(object(), {field: ["bad weight"]})),
                     ]
@@ -357,12 +358,13 @@ class RuntimeApiTests(unittest.TestCase):
     def test_hpsv3_reward_model_forward_uses_public_backbone(self):
         import torch
         from hpsv3_4bit.hpsv3.model import Qwen2VLRewardModelBT
-        model = Qwen2VLRewardModelBT(tiny_config("hpsv3"), output_dim=2, reward_token="special",
-                                     special_token_ids=[7], rm_head_type="ranknet")
+        model = Qwen2VLRewardModelBT(tiny_config("hpsv3"), output_dim=2, reward_token_id=7)
         model.eval()
         result = model(input_ids=torch.tensor([[1, 7, 2]]), attention_mask=torch.ones(1, 3, dtype=torch.long),
                        mm_token_type_ids=torch.zeros(1, 3, dtype=torch.long))
         self.assertEqual(tuple(result["logits"].shape), (1, 2))
+        self.assertEqual({key for key in model.state_dict() if key.startswith("rm_head.")}, {
+            f"rm_head.{index}.{name}" for index in (0, 3, 5) for name in ("weight", "bias")})
 
     def test_hpsv3pp_reward_model_forward_uses_public_backbone(self):
         import torch
@@ -397,9 +399,10 @@ class RuntimeApiTests(unittest.TestCase):
             self.skipTest(f"external upstream source unavailable: {exc}")
         for family, cls in (("hpsv3", Qwen2VLRewardModelBT), ("hpsv3pp", Qwen3VLRewardModelFiLMHybrid)):
             with self.subTest(family=family), tempfile.TemporaryDirectory() as directory:
-                settings = dict(output_dim=2, reward_token="special", special_token_ids=[7], rm_head_type="ranknet")
-                if family == "hpsv3pp":
-                    settings["cond_dim"] = 4
+                if family == "hpsv3":
+                    settings = dict(output_dim=2, reward_token_id=7)
+                else:
+                    settings = dict(output_dim=2, reward_token="special", special_token_ids=[7], rm_head_type="ranknet", cond_dim=4)
                 model = cls(tiny_config(family), **settings)
                 names = ("rm_head",) if family == "hpsv3" else ("rm_head", "cond_encoder", "film_gen")
                 original = {}

@@ -123,7 +123,8 @@ class HPSv3QuantizedInferencer:
         # needs the tokenizer's padding ID on the outer config for batches.
         config.pad_token_id = processor.tokenizer.pad_token_id
         model, info = Qwen2VLRewardModelBT.from_pretrained(
-            str(directory), config=config, **settings,
+            str(directory), config=config, output_dim=settings["output_dim"],
+            reward_token_id=settings["special_token_ids"][0],
             torch_dtype=torch.bfloat16, attn_implementation="sdpa", quantization_config=None,
             device_map={"": str(device)}, use_safetensors=True, output_loading_info=True,
             local_files_only=True, trust_remote_code=False, key_mapping=KEY_MAPPING)
@@ -147,7 +148,7 @@ class HPSv3QuantizedInferencer:
     @torch.inference_mode()
     def reward(self, image_paths, prompts):
         batch = self.prepare_batch(image_paths, prompts)
-        return self.model(return_dict=True, **batch)["logits"]
+        return self.model(**batch)["logits"]
 
     def score(self, image_paths, prompts):
         rewards = self.reward(image_paths, prompts)
