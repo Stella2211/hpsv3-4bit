@@ -80,8 +80,9 @@ def _restore_capability_dtype(model, directory):
 class HPSv3PPQuantizedInferencer:
     model: object
     processor: object
-    device: str = "cuda"
-    source_directory: str | None = None
+    device: str
+    instruction: str
+    reward_prompt: str
 
     @classmethod
     def from_merged_dir(cls, merged_dir, device="cuda", check_cancel=None, processor_directory=None,
@@ -98,6 +99,7 @@ class HPSv3PPQuantizedInferencer:
             processor.tokenizer.add_special_tokens({"additional_special_tokens": [SPECIAL_REWARD_TOKEN]})
         check_cancel()
         settings = _validate_checkpoint(directory, processor)
+        prompts = load_prompts(source_directory)
         config = load_merged_config(directory, processor.tokenizer)
         # Transformers 5 nests text settings; the reward pooling code also
         # needs the tokenizer's padding ID on the outer config for batches.
@@ -114,14 +116,13 @@ class HPSv3PPQuantizedInferencer:
         install_vision_interpolation_hook(model)
         _restore_capability_dtype(model, directory)
         model.eval()
-        return cls(model, processor, str(device), source_directory)
+        return cls(model, processor, str(device), prompts["INSTRUCTION"], prompts["prompt_with_special_token"])
 
     def prepare_batch(self, image_paths: Sequence, prompts: Sequence[str]):
         if not image_paths or len(image_paths) != len(prompts):
             raise ValueError("Provide a nonempty batch with one prompt per image.")
-        prompts_text = load_prompts(self.source_directory)
         batch = _batch(self.processor, list(image_paths),
-                       [prompts_text["INSTRUCTION"].format(text_prompt=prompt) + prompts_text["prompt_with_special_token"] for prompt in prompts], self.device)
+                       [self.instruction.format(text_prompt=prompt) + self.reward_prompt for prompt in prompts], self.device)
         token_id = self.processor.tokenizer.convert_tokens_to_ids(SPECIAL_REWARD_TOKEN)
         if not torch.all((batch["input_ids"] == token_id).sum(dim=1) == 1).item():
             raise ValueError("Each scoring request must contain exactly one reward token.")

@@ -239,7 +239,8 @@ class RuntimeApiTests(unittest.TestCase):
         images = [Image.new("RGB", (28, 28)), Image.new("RGB", (28, 28))]
         for family, class_name in (("hpsv3", "HPSv3QuantizedInferencer"), ("hpsv3pp", "HPSv3PPQuantizedInferencer")):
             module = importlib.import_module(f"hpsv3_4bit.{family}.quantized")
-            inferencer = getattr(module, class_name)(object(), processor, "cpu")
+            prompts = ("{text_prompt}", "<|Reward|>") if family == "hpsv3pp" else ()
+            inferencer = getattr(module, class_name)(object(), processor, "cpu", *prompts)
             for pictures, prompts in (([], []), (images, ["a"])):
                 with self.assertRaisesRegex(ValueError, "one prompt per image"):
                     inferencer.prepare_batch(pictures, prompts)
@@ -253,17 +254,28 @@ class RuntimeApiTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "exactly one reward token"):
                     inferencer.prepare_batch(images, ["a", "b"])
 
-    def test_hpsv3pp_prompt_loader_receives_source_directory(self):
+    def test_hpsv3pp_prompts_are_loaded_once_from_source_directory(self):
         import torch
         import hpsv3_4bit.hpsv3pp.quantized as module
-        processor = types.SimpleNamespace(tokenizer=types.SimpleNamespace(convert_tokens_to_ids=lambda token: 7))
-        inferencer = module.HPSv3PPQuantizedInferencer(object(), processor, "cpu", "/tmp/source")
-        batch = {"input_ids": torch.tensor([[1, 7, 2]])}
+        tokenizer = types.SimpleNamespace(convert_tokens_to_ids=lambda token: 7, pad_token_id=0)
+        processor = types.SimpleNamespace(tokenizer=tokenizer)
+        model = types.SimpleNamespace(eval=lambda: None)
         with patch.object(module, "load_prompts", return_value={
-            "INSTRUCTION": "{text_prompt}", "prompt_with_special_token": "<|Reward|>"}) as prompts, \
-             patch.object(module, "_batch", return_value=batch):
-            inferencer.prepare_batch([Image.new("RGB", (28, 28))], ["prompt"])
+                 "INSTRUCTION": "Rate {text_prompt}.", "prompt_with_special_token": "<|Reward|>"}) as prompts, \
+             patch.object(module, "_load_processor", return_value=processor), \
+             patch.object(module, "_validate_checkpoint", return_value={}), \
+             patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()), \
+             patch.object(module, "get_reward_model_class", return_value=types.SimpleNamespace(
+                 from_pretrained=lambda *args, **kwargs: (model, {}))), \
+             patch.object(module, "install_vision_interpolation_hook"), \
+             patch.object(module, "_restore_capability_dtype"), \
+             tempfile.TemporaryDirectory() as directory:
+            inferencer = module.HPSv3PPQuantizedInferencer.from_merged_dir(directory, device="cpu", source_directory="/tmp/source")
+            with patch.object(module, "_batch", return_value={"input_ids": torch.tensor([[1, 7, 2]])}) as batch:
+                inferencer.prepare_batch([Image.new("RGB", (28, 28))], ["a cat"])
+                inferencer.prepare_batch([Image.new("RGB", (28, 28))], ["a dog"])
         prompts.assert_called_once_with("/tmp/source")
+        self.assertEqual(batch.call_args.args[2], ["Rate a dog.<|Reward|>"])
 
     def test_incomplete_checkpoint_loads_are_never_accepted(self):
         import importlib
@@ -305,7 +317,8 @@ class RuntimeApiTests(unittest.TestCase):
         processor = types.SimpleNamespace(tokenizer=types.SimpleNamespace(convert_tokens_to_ids=lambda token: 7))
         for family, class_name in (("hpsv3", "HPSv3QuantizedInferencer"), ("hpsv3pp", "HPSv3PPQuantizedInferencer")):
             module = importlib.import_module(f"hpsv3_4bit.{family}.quantized")
-            inferencer = getattr(module, class_name)(object(), processor, "cpu")
+            prompts = ("{text_prompt}", "<|Reward|>") if family == "hpsv3pp" else ()
+            inferencer = getattr(module, class_name)(object(), processor, "cpu", *prompts)
             with patch.object(module, "_batch", return_value={"input_ids": torch.tensor([[7, 2, 7]])}):
                 with self.assertRaisesRegex(ValueError, "exactly one reward token"):
                     inferencer.prepare_batch([Image.new("RGB", (28, 28))], ["<|Reward|>"])
