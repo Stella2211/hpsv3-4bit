@@ -13,6 +13,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 from hpsv3_4bit.runtime import HPSv3Session, load_model
+import hpsv3_4bit.quantized as shared_quantized
 
 
 def tiny_config(family):
@@ -134,8 +135,8 @@ class RuntimeApiTests(unittest.TestCase):
                 tokenizer.add_special_tokens.assert_called_once_with({"additional_special_tokens": ["<|Reward|>"]})
                 raise ValueError("validation reached")
             with tempfile.TemporaryDirectory() as model_dir, tempfile.TemporaryDirectory() as processor_dir:
-                with patch.object(module, "_load_processor", return_value=processor) as loader, \
-                     patch.object(module, "_validate_checkpoint", side_effect=validate):
+                with patch.object(shared_quantized, "_load_processor", return_value=processor) as loader, \
+                     patch.object(module, "validate_checkpoint", side_effect=validate):
                     with self.assertRaisesRegex(ValueError, "validation reached"):
                         getattr(module, name).from_merged_dir(model_dir, processor_directory=processor_dir)
                     loader.assert_called_once_with(Path(processor_dir).resolve())
@@ -173,7 +174,7 @@ class RuntimeApiTests(unittest.TestCase):
             def load(*args, **kwargs):
                 captured.update(kwargs)
                 return Model(), {"missing_keys": [], "mismatched_keys": [], "unexpected_keys": [], "error_msgs": []}
-            with patch.object(module.AutoProcessor, "from_pretrained", return_value=Processor()), \
+            with patch.object(shared_quantized.AutoProcessor, "from_pretrained", return_value=Processor()), \
                  patch.object(module.Qwen2VLRewardModelBT, "from_pretrained", side_effect=load), \
                  patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()), \
                  patch.object(module, "_patch_quantized_visual_dtype"):
@@ -195,7 +196,7 @@ class RuntimeApiTests(unittest.TestCase):
             (directory / "config.json").write_text(json.dumps({"model_type": "qwen2_vl", "quantization_config": {}}))
             (directory / "reward_config.json").write_text(json.dumps({"format_version": 1, "model_kwargs": {}}))
             with self.assertRaises(ValueError):
-                module._validate_checkpoint(directory, processor)
+                shared_quantized.validate_checkpoint(directory, processor, "qwen2_vl", module.REWARD_SETTINGS)
 
     def test_hpsv3pp_loader_passes_strict_local_flags(self):
         import hpsv3_4bit.hpsv3pp.quantized as module
@@ -219,13 +220,13 @@ class RuntimeApiTests(unittest.TestCase):
                 captured.update(kwargs)
                 return Model(), {"missing_keys": [], "mismatched_keys": [], "unexpected_keys": [], "error_msgs": []}
             fake_class = types.SimpleNamespace(from_pretrained=staticmethod(load))
-            with patch.object(module.AutoProcessor, "from_pretrained", return_value=Processor()), \
+            with patch.object(shared_quantized.AutoProcessor, "from_pretrained", return_value=Processor()), \
                  patch.object(module, "get_reward_model_class", return_value=fake_class) as reward_class, \
                  patch.object(module, "install_vision_interpolation_hook"), \
                  patch.object(module, "_restore_capability_dtype"), \
                  patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()):
                 module.HPSv3PPQuantizedInferencer.from_merged_dir(directory, device="cpu", source_directory="/tmp/source")
-            reward_class.assert_called_once_with(source_directory="/tmp/source")
+            reward_class.assert_called_once_with("/tmp/source")
         self.assertTrue(captured["local_files_only"])
         self.assertFalse(captured["trust_remote_code"])
         self.assertTrue(captured["use_safetensors"])
@@ -239,18 +240,17 @@ class RuntimeApiTests(unittest.TestCase):
         images = [Image.new("RGB", (28, 28)), Image.new("RGB", (28, 28))]
         for family, class_name in (("hpsv3", "HPSv3QuantizedInferencer"), ("hpsv3pp", "HPSv3PPQuantizedInferencer")):
             module = importlib.import_module(f"hpsv3_4bit.{family}.quantized")
-            prompts = ("{text_prompt}", "<|Reward|>") if family == "hpsv3pp" else ()
-            inferencer = getattr(module, class_name)(object(), processor, "cpu", *prompts)
+            inferencer = getattr(module, class_name)(object(), processor, "cpu", "{text_prompt}", "<|Reward|>")
             for pictures, prompts in (([], []), (images, ["a"])):
                 with self.assertRaisesRegex(ValueError, "one prompt per image"):
                     inferencer.prepare_batch(pictures, prompts)
             good = {"input_ids": torch.tensor([[1, 7, 2], [7, 2, 0]])}
-            with patch.object(module, "_batch", return_value=good) as batch:
+            with patch.object(shared_quantized, "_batch", return_value=good) as batch:
                 self.assertIs(inferencer.prepare_batch(images, ["a", "b"]), good)
                 self.assertEqual(batch.call_args.args[1], images)
             # Total reward token count alone cannot catch a missing token in
             # one row combined with two tokens in another.
-            with patch.object(module, "_batch", return_value={"input_ids": torch.tensor([[7, 7], [1, 2]])}):
+            with patch.object(shared_quantized, "_batch", return_value={"input_ids": torch.tensor([[7, 7], [1, 2]])}):
                 with self.assertRaisesRegex(ValueError, "exactly one reward token"):
                     inferencer.prepare_batch(images, ["a", "b"])
 
@@ -262,8 +262,8 @@ class RuntimeApiTests(unittest.TestCase):
         model = types.SimpleNamespace(eval=lambda: None)
         with patch.object(module, "load_prompts", return_value={
                  "INSTRUCTION": "Rate {text_prompt}.", "prompt_with_special_token": "<|Reward|>"}) as prompts, \
-             patch.object(module, "_load_processor", return_value=processor), \
-             patch.object(module, "_validate_checkpoint", return_value={}), \
+             patch.object(shared_quantized, "_load_processor", return_value=processor), \
+             patch.object(module, "validate_checkpoint", return_value={}), \
              patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()), \
              patch.object(module, "get_reward_model_class", return_value=types.SimpleNamespace(
                  from_pretrained=lambda *args, **kwargs: (model, {}))), \
@@ -271,7 +271,7 @@ class RuntimeApiTests(unittest.TestCase):
              patch.object(module, "_restore_capability_dtype"), \
              tempfile.TemporaryDirectory() as directory:
             inferencer = module.HPSv3PPQuantizedInferencer.from_merged_dir(directory, device="cpu", source_directory="/tmp/source")
-            with patch.object(module, "_batch", return_value={"input_ids": torch.tensor([[1, 7, 2]])}) as batch:
+            with patch.object(shared_quantized, "_batch", return_value={"input_ids": torch.tensor([[1, 7, 2]])}) as batch:
                 inferencer.prepare_batch([Image.new("RGB", (28, 28))], ["a cat"])
                 inferencer.prepare_batch([Image.new("RGB", (28, 28))], ["a dog"])
         prompts.assert_called_once_with("/tmp/source")
@@ -288,8 +288,8 @@ class RuntimeApiTests(unittest.TestCase):
             for field in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs"):
                 with self.subTest(family=family, field=field), tempfile.TemporaryDirectory() as directory:
                     patches = [
-                        patch.object(module, "_load_processor", return_value=types.SimpleNamespace(tokenizer=types.SimpleNamespace(pad_token_id=0))),
-                        patch.object(module, "_validate_checkpoint", return_value={"output_dim": 2, "special_token_ids": [7]}),
+                        patch.object(shared_quantized, "_load_processor", return_value=types.SimpleNamespace(tokenizer=types.SimpleNamespace(pad_token_id=0))),
+                        patch.object(module, "validate_checkpoint", return_value={"output_dim": 2, "special_token_ids": [7]}),
                         patch.object(module, "load_merged_config", return_value=types.SimpleNamespace()),
                         patch.object(model_class, "from_pretrained", return_value=(object(), {field: ["bad weight"]})),
                     ]
@@ -317,9 +317,8 @@ class RuntimeApiTests(unittest.TestCase):
         processor = types.SimpleNamespace(tokenizer=types.SimpleNamespace(convert_tokens_to_ids=lambda token: 7))
         for family, class_name in (("hpsv3", "HPSv3QuantizedInferencer"), ("hpsv3pp", "HPSv3PPQuantizedInferencer")):
             module = importlib.import_module(f"hpsv3_4bit.{family}.quantized")
-            prompts = ("{text_prompt}", "<|Reward|>") if family == "hpsv3pp" else ()
-            inferencer = getattr(module, class_name)(object(), processor, "cpu", *prompts)
-            with patch.object(module, "_batch", return_value={"input_ids": torch.tensor([[7, 2, 7]])}):
+            inferencer = getattr(module, class_name)(object(), processor, "cpu", "{text_prompt}", "<|Reward|>")
+            with patch.object(shared_quantized, "_batch", return_value={"input_ids": torch.tensor([[7, 2, 7]])}):
                 with self.assertRaisesRegex(ValueError, "exactly one reward token"):
                     inferencer.prepare_batch([Image.new("RGB", (28, 28))], ["<|Reward|>"])
 
@@ -329,8 +328,8 @@ class RuntimeApiTests(unittest.TestCase):
         class Model:
             def generate(self, **kwargs): raise RuntimeError("stop")
         processor = types.SimpleNamespace(tokenizer=types.SimpleNamespace(pad_token_id=0, decode=lambda *a, **k: ""))
-        inferencer = module.HPSv3QuantizedInferencer(Model(), processor, "cpu")
-        with patch.object(module, "_batch", return_value={"input_ids": torch.ones(1, 1, dtype=torch.long)}):
+        inferencer = module.HPSv3QuantizedInferencer(Model(), processor, "cpu", "{text_prompt}", "<|Reward|>")
+        with patch.object(shared_quantized, "_batch", return_value={"input_ids": torch.ones(1, 1, dtype=torch.long)}):
             with self.assertRaisesRegex(RuntimeError, "stop"):
                 inferencer.caption([Image.new("RGB", (28, 28))])
         self.assertNotIn("forward", vars(inferencer.model))
