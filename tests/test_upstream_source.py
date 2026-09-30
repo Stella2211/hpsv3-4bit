@@ -105,17 +105,17 @@ class UpstreamSourceTests(unittest.TestCase):
             {"Retry-After": "30", "X-RateLimit-Reset": "1700000000"}, None,
         )
         with self._patch_source(), patch.object(upstream, "urlopen", side_effect=error):
-            with self.assertRaisesRegex(upstream.SourceProvisionError, "rate limit.*Retry-After=30.*X-RateLimit-Reset=1700000000"):
+            with self.assertRaisesRegex(upstream.SourceProvisionError, "HTTP 429, Retry-After=30, X-RateLimit-Reset=1700000000"):
                 upstream.ensure_source(source_directory=self.base)
         self.assertFalse((self.base / upstream.COMMIT).exists())
         self.assertEqual(list(self.base.glob(".*staging-*")), [])
 
-    def test_generic_forbidden_failure_is_not_called_rate_limit(self):
+    def test_forbidden_failure_reports_status_without_absent_headers(self):
         error = HTTPError("https://api.github.com", 403, "forbidden", {}, None)
         with self._patch_source(), patch.object(upstream, "urlopen", side_effect=error):
-            with self.assertRaisesRegex(upstream.SourceProvisionError, "access denied") as raised:
+            with self.assertRaisesRegex(upstream.SourceProvisionError, r"HTTP 403\. ") as raised:
                 upstream.ensure_source(source_directory=self.base)
-        self.assertNotIn("rate limit", str(raised.exception))
+        self.assertNotIn("Retry-After", str(raised.exception))
         self.assertEqual(list(self.base.glob(".*staging-*")), [])
 
     def test_corrupt_cache_is_repaired_atomically(self):
