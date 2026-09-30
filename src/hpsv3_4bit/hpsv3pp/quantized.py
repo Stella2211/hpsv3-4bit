@@ -12,13 +12,14 @@ from safetensors import safe_open
 from .hub import load_reward_settings
 from .merged_config import load_merged_config
 from .model import get_reward_model_class, install_vision_interpolation_hook
-from .prompts import load_prompts
+from .upstream import load_prompts
 
 SPECIAL_REWARD_TOKEN = "<|Reward|>"
 OUTPUT_DIM = 2
 RM_HEAD_TYPE = "ranknet"
 RM_HEAD_KWARGS = None
 COND_DIM = 256
+CAPABILITY_DTYPES = {"BF16": torch.bfloat16, "F32": torch.float32}
 MAX_PIXELS = MIN_PIXELS = 256 * 28 * 28
 CAPTION_INSTRUCTION = "Describe this image as a concise text-to-image prompt in one sentence."
 
@@ -69,10 +70,10 @@ def _restore_capability_dtype(model, directory):
         with safe_open(shard, framework="pt", device="cpu") as weights:
             for key in weights.keys():
                 if key.startswith("cap_encoder."):
-                    dtypes.add(weights.get_tensor(key).dtype)
-    if len(dtypes) != 1 or not dtypes <= {torch.bfloat16, torch.float32}:
+                    dtypes.add(weights.get_slice(key).get_dtype())
+    if len(dtypes) != 1 or not dtypes <= CAPABILITY_DTYPES.keys():
         raise ValueError("Capability weights must have one supported floating dtype.")
-    model.cap_encoder.to(dtype=dtypes.pop())
+    model.cap_encoder.to(dtype=CAPABILITY_DTYPES[dtypes.pop()])
 
 
 @dataclass

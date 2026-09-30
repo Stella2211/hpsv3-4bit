@@ -324,8 +324,7 @@ class RuntimeApiTests(unittest.TestCase):
 
     def test_hpsv3pp_prompt_constants_match_pinned_upstream(self):
         package = Path(__file__).parents[1]
-        from hpsv3_4bit.hpsv3pp.prompts import load_prompts
-        from hpsv3_4bit.hpsv3pp.upstream import SourceProvisionError
+        from hpsv3_4bit.hpsv3pp.upstream import SourceProvisionError, load_prompts
         try:
             prompts = load_prompts()
         except (FileNotFoundError, ImportError, SourceProvisionError) as exc:
@@ -369,10 +368,11 @@ class RuntimeApiTests(unittest.TestCase):
     def test_hpsv3pp_reward_model_forward_uses_public_backbone(self):
         import torch
         from transformers import Qwen3VLConfig
+        from hpsv3_4bit.hpsv3pp.model import get_reward_model_class
         from hpsv3_4bit.hpsv3pp.upstream import SourceProvisionError
         try:
-            from hpsv3_4bit.hpsv3pp.model import Qwen3VLRewardModelFiLMHybrid
-        except (FileNotFoundError, ImportError, SourceProvisionError) as exc:
+            Qwen3VLRewardModelFiLMHybrid = get_reward_model_class()
+        except SourceProvisionError as exc:
             self.skipTest(f"external upstream source unavailable: {exc}")
         config = Qwen3VLConfig(
             text_config={"vocab_size": 32, "hidden_size": 8, "intermediate_size": 16,
@@ -392,10 +392,11 @@ class RuntimeApiTests(unittest.TestCase):
     def test_bf16_backbone_loading_preserves_fp32_reward_weights(self):
         import torch
         from hpsv3_4bit.hpsv3.model import Qwen2VLRewardModelBT
+        from hpsv3_4bit.hpsv3pp.model import get_reward_model_class
         from hpsv3_4bit.hpsv3pp.upstream import SourceProvisionError
         try:
-            from hpsv3_4bit.hpsv3pp.model import Qwen3VLRewardModelFiLMHybrid
-        except (FileNotFoundError, ImportError, SourceProvisionError) as exc:
+            Qwen3VLRewardModelFiLMHybrid = get_reward_model_class()
+        except SourceProvisionError as exc:
             self.skipTest(f"external upstream source unavailable: {exc}")
         for family, cls in (("hpsv3", Qwen2VLRewardModelBT), ("hpsv3pp", Qwen3VLRewardModelFiLMHybrid)):
             with self.subTest(family=family), tempfile.TemporaryDirectory() as directory:
